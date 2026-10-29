@@ -16,7 +16,7 @@ from . import sync
 try:
     from aqt import gui_hooks, mw
     from aqt.qt import (
-        QAction, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel,
+        QAction, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenu,
         QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QTimer,
         QVBoxLayout,
     )
