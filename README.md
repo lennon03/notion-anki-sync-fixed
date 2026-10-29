@@ -33,6 +33,8 @@ Cards can contain:
 - **images** imported from Notion;
 - **tables** with borders and cell spacing.
 
+![MathJax, code, image, and table support](docs/supported-content.png)
+
 ## Related project
 
 [Notion Philo Workflow](https://notion-philo-workflow.vercel.app/) complements
