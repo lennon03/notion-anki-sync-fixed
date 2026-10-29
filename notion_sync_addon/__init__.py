@@ -272,13 +272,13 @@ def _open_settings() -> None:
         }
         QListWidget::item { padding: 8px; border-radius: 6px; }
         QListWidget::item:selected { background: #f4f4f5; color: #18181b; }
-        QCheckBox { spacing: 9px; color: #18181b; padding: 5px 0; font-size: 13px; }
+        QCheckBox { spacing: 9px; color: #18181b; padding: 0; font-size: 13px; }
         QCheckBox::indicator {
             width: 16px; height: 16px; border-radius: 4px;
-            border: 1px solid #a1a1aa; background: #ffffff;
+            border: 1px solid #a1a1aa; background: #f4f4f5;
         }
         QCheckBox::indicator:checked {
-            background: #18181b; border-color: #18181b;
+            background: #71717a; border-color: #71717a;
         }
         QPushButton {
             background: #ffffff; border: 1px solid #e4e4e7;
@@ -316,40 +316,21 @@ def _open_settings() -> None:
     layout.addWidget(connection)
 
     behavior = QGroupBox("Sync behavior")
-    behavior_form = QFormLayout(behavior)
+    behavior_layout = QVBoxLayout(behavior)
     interval = QSpinBox()
     interval.setRange(0, 10080)
     interval.setSuffix(" min")
     interval.setSpecialValueText("Off")
     interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
-    autosync = QCheckBox("Enable automatic sync")
-    autosync.setChecked(interval.value() > 0)
-    behavior_form.addRow("", autosync)
-    behavior_form.addRow("Auto-sync interval", interval)
-    last_interval = {"value": interval.value() or 60}
-
-    def toggle_autosync(enabled: bool) -> None:
-        if enabled:
-            interval.setValue(last_interval["value"])
-        else:
-            if interval.value() > 0:
-                last_interval["value"] = interval.value()
-            interval.setValue(0)
-        interval.setEnabled(enabled)
-
-    def remember_interval(value: int) -> None:
-        if value > 0:
-            last_interval["value"] = value
-
-    interval.valueChanged.connect(remember_interval)
-    autosync.toggled.connect(toggle_autosync)
-    interval.setEnabled(autosync.isChecked())
+    interval_label = QLabel("Auto-sync interval (0 = off)")
+    behavior_layout.addWidget(interval_label)
+    behavior_layout.addWidget(interval)
     empty_cards = QCheckBox("Add rows without a title as empty cards")
     empty_cards.setChecked(bool(cfg.get("include_empty_cards", True)))
     empty_cards.setToolTip(
         "When enabled, rows with no title still become cards with an empty front."
     )
-    behavior_form.addRow("", empty_cards)
+    behavior_layout.addWidget(empty_cards)
     layout.addWidget(behavior)
 
     pages_group = QGroupBox("Notion pages")
@@ -364,7 +345,10 @@ def _open_settings() -> None:
     for entry in cfg.get("notion_pages", []):
         value = entry if isinstance(entry, str) else entry.get("page_id", "")
         if value:
-            pages.addItem(QListWidgetItem(str(value)))
+            try:
+                pages.addItem(QListWidgetItem(sync.canonical_page_id(str(value))))
+            except sync.NotionError:
+                pages.addItem(QListWidgetItem(str(value)))
     pages_layout.addWidget(pages)
 
     add_row = QHBoxLayout()
@@ -377,8 +361,7 @@ def _open_settings() -> None:
     pages_layout.addLayout(add_row)
 
     page_actions = QHBoxLayout()
-    remove_button = QPushButton("Remove selected")
-    remove_button.setText("Remove selected")
+    remove_button = QPushButton("Remove")
     remove_button.setEnabled(False)
     page_actions.addWidget(remove_button)
     page_actions.addStretch(1)
@@ -417,7 +400,7 @@ def _open_settings() -> None:
         if page_id in existing_ids:
             QMessageBox.information(dialog, "Already added", "That page is already in the list.")
             return
-        pages.addItem(QListWidgetItem(raw))
+        pages.addItem(QListWidgetItem(page_id))
         page_input.clear()
         update_page_state()
 
@@ -425,22 +408,11 @@ def _open_settings() -> None:
     page_input.returnPressed.connect(add_page)
     update_page_state()
 
-    buttons = QHBoxLayout()
-    save = QPushButton("Save settings")
-    save.setObjectName("primary")
-    cancel = QPushButton("Cancel")
-    save.setDefault(True)
-    buttons.addStretch(1)
-    buttons.addWidget(cancel)
-    buttons.addWidget(save)
-    layout.addLayout(buttons)
-    cancel.clicked.connect(dialog.reject)
-
     def save_config() -> None:
         values = [pages.item(i).text().strip() for i in range(pages.count())]
         if not values:
             QMessageBox.warning(dialog, "Missing pages", "Add at least one Notion page.")
-            return
+            return False
         mw.addonManager.writeConfig(
             __name__,
             {
@@ -451,9 +423,26 @@ def _open_settings() -> None:
             },
         )
         _schedule_autosync()
-        dialog.accept()
+        return True
 
-    save.clicked.connect(save_config)
+    buttons = QHBoxLayout()
+    cancel = QPushButton("Cancel")
+    apply = QPushButton("Apply")
+    save = QPushButton("Save & close")
+    sync_now = QPushButton("Sync now")
+    save.setObjectName("primary")
+    buttons.addStretch(1)
+    buttons.addWidget(cancel)
+    buttons.addWidget(apply)
+    buttons.addWidget(sync_now)
+    buttons.addWidget(save)
+    layout.addLayout(buttons)
+
+    cancel.clicked.connect(dialog.reject)
+    apply.clicked.connect(save_config)
+    save.clicked.connect(lambda: (save_config() and dialog.accept()))
+    sync_now.clicked.connect(lambda: (save_config() and (dialog.accept(), run_sync())))
+
     dialog.exec()
 
 
