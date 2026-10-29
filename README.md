@@ -15,6 +15,8 @@ Auto-sync is off by default. Set the interval in **minutes**; `0` means off.
 Rows without titles are imported as empty-front cards by default and can be
 disabled in Settings.
 
+![Notion Sync settings](docs/settings.png)
+
 Each Notion page becomes a deck, each table becomes a subdeck, and each row
 becomes a card. Synced cards are updated or removed when their Notion source
 disappears. Decks and manually created cards are never deleted.
