@@ -29,9 +29,6 @@ from .notion_api import (
 )
 
 MODEL_NAME = "Notion Sync Card"
-MODEL_ID = 1729948322001  # stable pseudo-random id, do not change
-
-
 # --------------------------------------------------------------------- #
 # Data model
 # --------------------------------------------------------------------- #
@@ -379,7 +376,6 @@ def _get_or_create_model(col) -> dict:
         return model
 
     model = col.models.new(MODEL_NAME)
-    model["id"] = MODEL_ID
     fieldnames = ("Front", "Back", "Source")
     existing = {f["name"] for f in model["flds"]}
     for fname in fieldnames:

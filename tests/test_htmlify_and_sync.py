@@ -2,7 +2,12 @@
 import os
 
 from notion_sync_addon.htmlify import MediaCollector, render_blocks
-from notion_sync_addon.sync import canonical_page_id, deck_safe, resolve_token
+from notion_sync_addon.sync import (
+    _get_or_create_model,
+    canonical_page_id,
+    deck_safe,
+    resolve_token,
+)
 
 
 class FakeTree:
@@ -133,3 +138,30 @@ def test_token_from_env(tmp_path, monkeypatch):
     assert resolve_token({})
     assert "secret" in resolve_token({})
     assert resolve_token({"notion_token": "cfg-token"})
+
+
+def test_model_creation_leaves_backend_managed_id():
+    class Models:
+        def by_name(self, name):
+            return None
+
+        def new(self, name):
+            return {"name": name, "id": 0, "flds": [], "tmpls": []}
+
+        def new_field(self, name):
+            return {"name": name}
+
+        def add_field(self, model, field):
+            model["flds"].append(field)
+
+        def add_template(self, model, template):
+            model["tmpls"].append(template)
+
+        def add_dict(self, model):
+            assert model["id"] == 0
+
+    class Collection:
+        models = Models()
+
+    model = _get_or_create_model(Collection())
+    assert model["id"] == 0
