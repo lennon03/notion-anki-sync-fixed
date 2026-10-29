@@ -17,22 +17,6 @@ disabled in Settings.
 
 ![Notion Sync settings](docs/settings.png)
 
-## Notion page structure
-
-Organize your Notion content as a page containing one or more tables. Each
-table becomes a subdeck, and each row in a table becomes a card:
-
-```text
-Notion page
-└── Table
-    ├── Row → card
-    ├── Row → card
-    └── Row → card
-```
-
-Use the table's title property for the card front. The rest of the row content
-becomes the card back. For example:
-
 ![Example Notion page structure](docs/notion-structure.png)
 
 Each Notion page becomes a deck, each table becomes a subdeck, and each row
@@ -52,11 +36,6 @@ Les cartes peuvent contenir :
 - des **tableaux** avec bordures et cellules espacées.
 
 ![MathJax, code, image et tableau](docs/supported-content.png)
-
-## Card preview
-
-The add-on supports formatted MathJax, code, and images in the card preview.
-Tables include borders and spacing so their contents remain readable.
 
 ![Card preview](docs/preview.png)
 
