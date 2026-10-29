@@ -118,6 +118,12 @@ def canonical_page_id(raw: str) -> str:
     bare = raw.replace("-", "")
     if re.fullmatch(r"[0-9a-fA-F]{32}", bare):
         return bare
+    match = re.search(
+        r"(?i)([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{32})",
+        raw,
+    )
+    if match:
+        return match.group(1).replace("-", "").lower()
     # URL: take the slug after the last /, then the id is the trailing
     # 32-hex segment after the title words (e.g. .../p/Philo-Histoire-<32hex>).
     slug = raw.rstrip("/").split("/")[-1].split("?")[0]

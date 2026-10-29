@@ -125,6 +125,10 @@ def _rt(text):
 def test_canonical_id_and_deck_names():
     assert canonical_page_id("https://app.notion.com/p/Philo-Histoire-1bbf4336b2b480f4a0b6fc07ce4ee5e4") \
         == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
+    assert canonical_page_id(
+        "https://app.notion.com/p/Philo-Histoire-1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4"
+        "?source=copy_link"
+    ) == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
     assert canonical_page_id("1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4") == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
     assert deck_safe("Le bonheur") == "Le bonheur"
     assert deck_safe("a: b::c") == "a  b/c"
