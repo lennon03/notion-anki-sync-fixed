@@ -323,7 +323,7 @@ def _open_settings() -> None:
     interval.setSuffix(" minutes")
     interval.setSpecialValueText("Off")
     interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
-    interval_label = QLabel("Auto-sync interval (0 = off)")
+    interval_label = QLabel("Auto-sync interval in minutes (0 = off)")
     behavior_layout.addWidget(interval_label)
     behavior_layout.addWidget(interval)
     empty_cards = QCheckBox("Add rows without a title as empty cards")
