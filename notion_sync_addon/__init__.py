@@ -16,9 +16,9 @@ from . import sync
 try:
     from aqt import gui_hooks, mw
     from aqt.qt import (
-        QAction, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenu,
-        QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QTimer,
-        QVBoxLayout,
+        QAction, QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
+        QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
+        QSpinBox, QStyle, QTimer, QToolButton, QVBoxLayout, QLineEdit,
     )
     from aqt.utils import showInfo, showWarning
 
@@ -165,7 +165,7 @@ def stop_autosync() -> None:
 # --------------------------------------------------------------------- #
 
 
-def _open_settings() -> None:
+def _open_settings_legacy() -> None:
     cfg = _config()
     dialog = QDialog(mw)
     dialog.setWindowTitle("Notion Sync Settings")
@@ -234,6 +234,151 @@ def _open_settings() -> None:
             {
                 "notion_token": token.text().strip(),
                 "notion_pages": values,
+                "sync_every_minutes": interval.value(),
+            },
+        )
+        _schedule_autosync()
+        dialog.accept()
+
+    save.clicked.connect(save_config)
+    dialog.exec()
+
+
+def _open_settings() -> None:
+    cfg = _config()
+    dialog = QDialog(mw)
+    dialog.setWindowTitle("Notion Sync Settings")
+    dialog.setMinimumWidth(560)
+    layout = QVBoxLayout(dialog)
+    layout.setSpacing(12)
+
+    intro = QLabel(
+        "<h2>Notion Sync</h2>"
+        "<p>Choose the pages to sync and how often Anki should check Notion.</p>"
+    )
+    intro.setWordWrap(True)
+    layout.addWidget(intro)
+
+    connection = QGroupBox("Connection")
+    connection_form = QFormLayout(connection)
+    token = QLineEdit(str(cfg.get("notion_token") or ""))
+    token.setEchoMode(QLineEdit.EchoMode.Password)
+    token.setPlaceholderText("Paste your Notion integration token")
+    token.setClearButtonEnabled(True)
+    connection_form.addRow("Notion token", token)
+    layout.addWidget(connection)
+
+    behavior = QGroupBox("Sync behavior")
+    behavior_form = QFormLayout(behavior)
+    interval = QSpinBox()
+    interval.setRange(0, 10080)
+    interval.setSuffix(" min")
+    interval.setSpecialValueText("Off")
+    interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
+    behavior_form.addRow("Auto-sync interval", interval)
+    empty_cards = QCheckBox("Add rows without a title as empty cards")
+    empty_cards.setChecked(bool(cfg.get("include_empty_cards", True)))
+    empty_cards.setToolTip(
+        "When enabled, rows with no title still become cards with an empty front."
+    )
+    behavior_form.addRow("", empty_cards)
+    layout.addWidget(behavior)
+
+    pages_group = QGroupBox("Notion pages")
+    pages_layout = QVBoxLayout(pages_group)
+    hint = QLabel("Add a page URL or its 32-character ID.")
+    hint.setStyleSheet("color: palette(mid);")
+    pages_layout.addWidget(hint)
+    pages = QListWidget()
+    pages.setMinimumHeight(130)
+    pages.setAlternatingRowColors(True)
+    pages.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+    for entry in cfg.get("notion_pages", []):
+        value = entry if isinstance(entry, str) else entry.get("page_id", "")
+        if value:
+            pages.addItem(QListWidgetItem(str(value)))
+    pages_layout.addWidget(pages)
+
+    add_row = QHBoxLayout()
+    page_input = QLineEdit()
+    page_input.setPlaceholderText("https://app.notion.com/p/... or page ID")
+    add_button = QPushButton("Add page")
+    add_button.setDefault(True)
+    add_row.addWidget(page_input)
+    add_row.addWidget(add_button)
+    pages_layout.addLayout(add_row)
+
+    page_actions = QHBoxLayout()
+    remove_button = QToolButton()
+    remove_button.setText("Remove selected")
+    remove_button.setIcon(dialog.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+    remove_button.setEnabled(False)
+    page_actions.addWidget(remove_button)
+    page_actions.addStretch(1)
+    page_count = QLabel()
+    page_actions.addWidget(page_count)
+    pages_layout.addLayout(page_actions)
+    layout.addWidget(pages_group)
+
+    def update_page_state() -> None:
+        page_count.setText(f"{pages.count()} page(s)")
+        remove_button.setEnabled(pages.currentItem() is not None)
+
+    pages.itemSelectionChanged.connect(update_page_state)
+
+    def remove_page() -> None:
+        row = pages.currentRow()
+        if row >= 0:
+            pages.takeItem(row)
+            update_page_state()
+
+    remove_button.clicked.connect(remove_page)
+
+    def add_page() -> None:
+        raw = page_input.text().strip()
+        if not raw:
+            return
+        try:
+            page_id = sync.canonical_page_id(raw)
+        except sync.NotionError as exc:
+            QMessageBox.warning(dialog, "Invalid page", str(exc))
+            return
+        existing_ids = {
+            sync.canonical_page_id(pages.item(i).text())
+            for i in range(pages.count())
+        }
+        if page_id in existing_ids:
+            QMessageBox.information(dialog, "Already added", "That page is already in the list.")
+            return
+        pages.addItem(QListWidgetItem(raw))
+        page_input.clear()
+        update_page_state()
+
+    add_button.clicked.connect(add_page)
+    page_input.returnPressed.connect(add_page)
+    update_page_state()
+
+    buttons = QHBoxLayout()
+    save = QPushButton("Save settings")
+    cancel = QPushButton("Cancel")
+    save.setDefault(True)
+    buttons.addStretch(1)
+    buttons.addWidget(cancel)
+    buttons.addWidget(save)
+    layout.addLayout(buttons)
+    cancel.clicked.connect(dialog.reject)
+
+    def save_config() -> None:
+        values = [pages.item(i).text().strip() for i in range(pages.count())]
+        if not values:
+            QMessageBox.warning(dialog, "Missing pages", "Add at least one Notion page.")
+            return
+        mw.addonManager.writeConfig(
+            __name__,
+            {
+                "notion_token": token.text().strip(),
+                "notion_pages": values,
+                "include_empty_cards": empty_cards.isChecked(),
                 "sync_every_minutes": interval.value(),
             },
         )

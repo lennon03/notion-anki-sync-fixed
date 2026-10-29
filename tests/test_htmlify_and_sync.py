@@ -4,6 +4,7 @@ import os
 from notion_sync_addon.htmlify import MediaCollector, render_blocks
 from notion_sync_addon.sync import (
     _get_or_create_model,
+    _fetch_table,
     _remove_obsolete,
     canonical_page_id,
     deck_safe,
@@ -197,3 +198,28 @@ def test_obsolete_cleanup_keeps_manual_cards():
     col = Collection()
     assert _remove_obsolete(col, {"current-source"}) == 1
     assert col.removed == [1]
+
+
+def test_empty_cards_are_enabled_by_default():
+    class Client:
+        def get_database(self, database_id):
+            return {"title": [{"plain_text": "Table"}], "data_sources": [{"id": "ds"}]}
+
+        def query_data_source(self, data_source_id):
+            return [{"id": "row-1", "properties": {"Name": {"type": "title", "title": []}}}]
+
+    class Tree:
+        def children(self, block_id):
+            return []
+
+    result = type("Result", (), {"warnings": []})()
+    result.config = {}
+    table = _fetch_table(Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result)
+    assert table is not None
+    assert len(table.rows) == 1
+    assert table.rows[0].front == ""
+
+    result.config = {"include_empty_cards": False}
+    table = _fetch_table(Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result)
+    assert table is not None
+    assert table.rows == []

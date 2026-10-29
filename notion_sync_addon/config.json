@@ -1,5 +1,6 @@
 {
   "notion_token": "",
   "notion_pages": [],
+  "include_empty_cards": true,
   "sync_every_minutes": 0
 }

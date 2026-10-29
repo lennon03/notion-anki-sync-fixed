@@ -58,6 +58,7 @@ class PageData:
 class SyncResult:
     def __init__(self):
         self.pages: List[PageData] = []
+        self.config: dict = {}
         self.media_dir: str = ""
         self.media_files: List[Tuple[str, str]] = []  # (abs path, fname)
         self.warnings: List[str] = []
@@ -156,6 +157,7 @@ def fetch_pages(cfg: dict) -> SyncResult:
     tree = BlockTree(client)
     media = MediaCollector()
     result = SyncResult()
+    result.config = cfg
     result.media_dir = tempfile.mkdtemp(prefix="notion-anki-sync-")
     for entry in cfg.get("notion_pages", []):
         raw = entry if isinstance(entry, str) else entry.get("page_id", "")
@@ -283,7 +285,7 @@ def _fetch_table(
             if prop.get("type") == "title":
                 front = "".join(x.get("plain_text", "") for x in prop.get("title", [])).strip()
                 break
-        if not front:
+        if not front and not bool(result.config.get("include_empty_cards", True)):
             result.warnings.append(f"Suspended empty row in table '{title}' (no title): skipped")
             continue
         row_id = row["id"].replace("-", "")

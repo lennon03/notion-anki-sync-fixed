@@ -15,6 +15,8 @@ Creates decks from your Notion workspace using the official Notion API
 - `notion_token`: internal integration token. Leave empty to use the
   `NOTION_API_TOKEN` environment variable or a `.env` file.
 - `notion_pages`: list of page URLs or ids.
+- `include_empty_cards`: add rows without a title as empty-front cards; enabled
+  by default.
 - `sync_every_minutes`: background sync interval in minutes. `0` disables
   auto-sync (the default).
 

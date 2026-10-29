@@ -7,6 +7,8 @@ An [Anki](https://apps.ankiweb.net/) add-on that creates Anki decks from
 
 - Configure pages in **Tools > Notion Sync > Settings**.
 - Add either a full Notion page URL or its 32-character page id.
+- Choose whether rows without titles should be added as empty-front cards
+  (enabled by default).
 - Each page becomes a deck named after that page.
 - Each table becomes a subdeck, and each row becomes a card.
 - Notion is the source of truth for synced cards: one sync updates cards and
