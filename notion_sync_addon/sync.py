@@ -190,15 +190,9 @@ def _fetch_page(
     result.pages.append(data)
 
     blocks = tree.children(page_id)
-    for block in blocks:
-        if (
-            recursive
-            and block.get("type") == "child_page"
-            and block.get("has_children")
-        ):
-            _recurse_into_subpage(block, client, tree, media, data, result, recursive)
-
-    _collect_page_children(page_id, client, tree, media, data, result, recursive)
+    _collect_page_children(
+        page_id, client, tree, media, data, result, recursive, blocks=blocks
+    )
 
 
 def _recurse_into_subpage(
@@ -229,8 +223,10 @@ def _collect_page_children(
     data: PageData,
     result: SyncResult,
     recursive: bool = False,
+    blocks: Optional[list] = None,
 ) -> None:
-    blocks = tree.children(page_id)
+    if blocks is None:
+        blocks = tree.children(page_id)
     for block in blocks:
         if block.get("type") == "child_database":
             table = _fetch_table(client, tree, block, media, data.deck_name, result)

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "notion-anki-sync"
-version = "0.9.25"
+version = "0.9.26"
 description = "Anki addon that creates decks from Notion pages (official API): page -> deck, table -> subdeck, row -> card."
 repository = "https://github.com/9dogs/notion-anki-sync"
 homepage = "https://github.com/9dogs/notion-anki-sync"

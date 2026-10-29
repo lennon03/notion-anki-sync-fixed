@@ -2,6 +2,7 @@
 import os
 
 from notion_sync_addon.htmlify import MediaCollector, render_blocks
+from notion_sync_addon.notion_api import NotionClient
 from notion_sync_addon.sync import (
     _get_or_create_model,
     _fetch_table,
@@ -144,6 +145,31 @@ def test_token_from_env(tmp_path, monkeypatch):
     assert resolve_token({})
     assert "secret" in resolve_token({})
     assert resolve_token({"notion_token": "cfg-token"})
+
+
+def test_notion_client_uses_configured_token():
+    client = NotionClient("secret-token")
+    assert client._headers["Authorization"] == "Bearer secret-token"
+
+
+def test_page_children_are_fetched_once():
+    from notion_sync_addon.sync import PageData, SyncResult, _collect_page_children
+
+    class CountingTree:
+        def __init__(self):
+            self.calls = []
+
+        def children(self, block_id):
+            self.calls.append(block_id)
+            return []
+
+    tree = CountingTree()
+    result = SyncResult()
+    data = PageData(title="Page", deck_name="Page")
+    _collect_page_children(
+        "page-id", object(), tree, MediaCollector(), data, result
+    )
+    assert tree.calls == ["page-id"]
 
 
 def test_model_creation_leaves_backend_managed_id():
