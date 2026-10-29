@@ -42,6 +42,17 @@ disappears. Decks and manually created cards are never deleted.
 Notion content supports formatting, lists, code, MathJax, links, and imported
 images, audio, video, and attachments. Cards use Anki's normal styling.
 
+## Contenu pris en charge
+
+Les cartes peuvent contenir :
+
+- des formules **MathJax** ;
+- du **code** avec une mise en forme lisible ;
+- des **images** importées depuis Notion ;
+- des **tableaux** avec bordures et cellules espacées.
+
+![MathJax, code, image et tableau](docs/supported-content.png)
+
 ## Card preview
 
 The add-on supports formatted MathJax, code, and images in the card preview.
