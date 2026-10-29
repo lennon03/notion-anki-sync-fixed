@@ -265,7 +265,10 @@ def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
     rows: List[dict] = []
     if block.get("has_children"):
         rows = tree.children(block.get("id"))
-    lines: List[str] = ["<table class='ns-table'>"]
+    lines: List[str] = [
+        "<table class='ns-table' style='border-collapse:collapse; "
+        "border:1px solid #b8bec5; width:100%; text-align:left;'>"
+    ]
     col_header = bool(body.get("has_column_header"))
     row_header = bool(body.get("has_row_header"))
     for idx, row in enumerate(rows):
@@ -277,7 +280,8 @@ def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
             else:
                 tags.append("td")
         cells_html = "".join(
-            f"<{t}>{rich_text_to_html(cell)}</{t}>"
+            f"<{t} style='border:1px solid #b8bec5; padding:6px 8px; "
+            f"vertical-align:top;'>{rich_text_to_html(cell)}</{t}>"
             for t, cell in zip(tags, cells)
         )
         open_thead = '<thead>' if idx == 0 and col_header else ''

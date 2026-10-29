@@ -96,8 +96,11 @@ def test_table_rendering():
          "table_row": {"cells": [_rt("1"), _rt("2")]}},
     ]})
     out = render_blocks(blocks, MediaCollector(), tree)
-    assert "<thead>" in out and "<th>A</th><th>B</th>" in out
-    assert "<tbody>" in out and "<td>1</td>" in out
+    assert "<thead>" in out
+    assert "<th style=" in out and ">A</th><th style=" in out
+    assert "<tbody>" in out and "<td style=" in out and ">1</td>" in out
+    assert "border-collapse:collapse" in out
+    assert "border:1px solid #b8bec5" in out
 
 
 def test_image_file_becomes_media_placeholder():

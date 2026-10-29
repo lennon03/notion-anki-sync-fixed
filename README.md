@@ -17,12 +17,37 @@ disabled in Settings.
 
 ![Notion Sync settings](docs/settings.png)
 
+## Notion page structure
+
+Organize your Notion content as a page containing one or more tables. Each
+table becomes a subdeck, and each row in a table becomes a card:
+
+```text
+Notion page
+└── Table
+    ├── Row → card
+    ├── Row → card
+    └── Row → card
+```
+
+Use the table's title property for the card front. The rest of the row content
+becomes the card back. For example:
+
+![Example Notion page structure](docs/notion-structure.png)
+
 Each Notion page becomes a deck, each table becomes a subdeck, and each row
 becomes a card. Synced cards are updated or removed when their Notion source
 disappears. Decks and manually created cards are never deleted.
 
 Notion content supports formatting, lists, code, MathJax, links, and imported
 images, audio, video, and attachments. Cards use Anki's normal styling.
+
+## Card preview
+
+The add-on supports formatted MathJax, code, and images in the card preview.
+Tables include borders and spacing so their contents remain readable.
+
+![Card preview](docs/preview.png)
 
 ## Related project
 
