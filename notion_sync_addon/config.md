@@ -15,8 +15,8 @@ Creates decks from your Notion workspace using the official Notion API
 - `notion_token`: internal integration token. Leave empty to use the
   `NOTION_API_TOKEN` environment variable or a `.env` file.
 - `notion_pages`: list of page URLs or ids.
-- `autosync`: `false` by default; set to `true` to enable background syncing.
-- `sync_every_minutes`: interval in minutes when `autosync` is enabled.
+- `sync_every_minutes`: background sync interval in minutes. `0` disables
+  auto-sync (the default).
 
 Use **Tools > Notion Sync > Settings** to edit these values. The add-on accepts
 both full Notion URLs and plain 32-character page ids.

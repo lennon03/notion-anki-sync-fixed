@@ -16,7 +16,7 @@ from . import sync
 try:
     from aqt import gui_hooks, mw
     from aqt.qt import (
-        QAction, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenu,
+        QAction, QDialog, QFormLayout, QHBoxLayout, QLabel, QMenu,
         QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QTimer,
         QVBoxLayout,
     )
@@ -137,7 +137,7 @@ def _after_fetch(holder: Dict[str, Any]) -> None:
 def _schedule_autosync() -> None:
     stop_autosync()
     cfg = _config()
-    interval_minutes = int(cfg.get("sync_every_minutes") or 0) if cfg.get("autosync") else 0
+    interval_minutes = int(cfg.get("sync_every_minutes") or 0)
     if interval_minutes <= 0:
         return
 
@@ -177,17 +177,12 @@ def _open_settings() -> None:
     token.setPlaceholderText("secret_...")
     form.addRow("Notion token:", token)
 
-    autosync = QCheckBox("Enable automatic sync")
-    autosync.setChecked(bool(cfg.get("autosync", False)))
-    form.addRow("", autosync)
-
     interval = QSpinBox()
-    interval.setRange(1, 10080)
+    interval.setRange(0, 10080)
     interval.setSuffix(" minutes")
-    interval.setValue(max(1, int(cfg.get("sync_every_minutes") or 60)))
-    interval.setEnabled(autosync.isChecked())
-    autosync.toggled.connect(interval.setEnabled)
-    form.addRow("Sync interval:", interval)
+    interval.setSpecialValueText("Off")
+    interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
+    form.addRow("Auto-sync interval:", interval)
     layout.addLayout(form)
 
     layout.addWidget(QLabel("Notion pages"))
@@ -239,8 +234,7 @@ def _open_settings() -> None:
             {
                 "notion_token": token.text().strip(),
                 "notion_pages": values,
-                "autosync": autosync.isChecked(),
-                "sync_every_minutes": interval.value() if autosync.isChecked() else 0,
+                "sync_every_minutes": interval.value(),
             },
         )
         _schedule_autosync()
