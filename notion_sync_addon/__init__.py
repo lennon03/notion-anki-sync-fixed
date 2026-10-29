@@ -1,436 +1,201 @@
-"""Notion Sync plugin."""
-import json
-import zipfile
-from pathlib import Path
-from shutil import rmtree
-from tempfile import TemporaryDirectory
-from traceback import format_exc
-from typing import Any, Dict, List, Optional, Set, cast
+# -*- coding: utf-8 -*-
+"""Notion Sync addon - official Notion API -> Anki.
 
-from anki.collection import Collection
-from aqt import mw
-from aqt.gui_hooks import main_window_did_init
-from aqt.utils import showCritical, showInfo
-from jsonschema import ValidationError, validate
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import QMenu, QMessageBox
+Structure created in your collection:
+  target deck (config) -> a deck per configured Notion page
+    -> a subdeck per table in that page
+      -> one card per row (Front = title column, Back = row page content)
+"""
+from __future__ import annotations
 
-from .helpers import (
-    BASE_DIR,
-    enable_logging_to_file,
-    get_logger,
-    normalize_block_id,
-    safe_path,
-    safe_str,
-)
-from .notes_manager import NotesManager
-from .notion_client import NotionClient, NotionClientError
-from .parser import AnkiNote, extract_notes_data
+import threading
+import traceback
+from typing import Any, Dict
+
+from . import sync
+
+try:
+    from aqt import gui_hooks, mw
+    from aqt.qt import QAction, QMenu, QTimer
+    from aqt.utils import showInfo, showWarning
+
+    _IN_ANKI = True
+except ImportError:  # imported outside Anki (tests / tooling) - register nothing
+    _IN_ANKI = False
+
+MENU_TITLE = "Notion Sync"
+
+_state: Dict[str, Any] = {"busy": False, "timer": None}
 
 
-class NotionSyncPlugin(QObject):
-    """Notion sync plugin.
+def _config() -> dict:
+    try:
+        return mw.addonManager.getConfig(__name__) or {}
+    except Exception:
+        return {}
 
-    Reads config, handles signals from Anki and spawns synchronization tasks
-    on timer.
-    """
 
-    #: Default deck name
-    DEFAULT_DECK_NAME: str = 'Notion Sync'
-    #: Default sync interval, min
-    DEFAULT_SYNC_INTERVAL: int = 30
+# --------------------------------------------------------------------- #
+# two-phase sync (network thread -> main thread collection writes)
+# --------------------------------------------------------------------- #
 
-    def __init__(self):
-        """Init plugin."""
-        super().__init__()
-        # While testing `mw` is None
-        if not mw:
-            return
-        # Load config
-        config = mw.addonManager.getConfig(__name__)
-        mw.addonManager.setConfigUpdatedAction(__name__, self.reload_config)
-        # Validate config
-        self.config = self.get_valid_config(config)
-        # Create a logger
-        self.debug = 'debug' in self.config and self.config['debug']
-        if self.debug:
-            enable_logging_to_file()
-        self.logger = get_logger(self.__class__.__name__, self.debug)
-        self.logger.info('Config loaded: %s', self.config)
-        # Anki's collection and note manager
-        self.collection: Optional[Collection] = None
-        self._collection_seeded = False
-        self.notes_manager: Optional[NotesManager] = None
-        # Workers scaffolding
-        self.thread_pool = QThreadPool()
-        self.synced_note_ids: Set[int] = set()
-        self._alive_workers: int = 0
-        self._sync_errors: List[str] = []
-        # Sync stats
-        self._processed = self._created = self._updated = self._deleted = 0
-        self.existing_note_ids: Set[int] = set()
-        self._remove_obsolete_on_sync = False
-        # Add action to Anki menu
-        self.notion_menu: Optional[QMenu] = None
-        self.add_actions()
-        # Add callback to seed the collection then it's ready
-        main_window_did_init.append(self.seed_collection)
-        # Perform auto sync after main window initialization
-        main_window_did_init.append(self.auto_sync)
-        # Create and run timer
-        self._is_auto_sync = True
-        self.timer = QTimer()
-        sync_interval_milliseconds = (
-            self.config.get('sync_every_minutes', self.DEFAULT_SYNC_INTERVAL)
-            * 60  # seconds
-            * 1000  # milliseconds
+
+def run_sync(remove_obsolete: bool = False, preview_only: bool = False) -> None:
+    if _state["busy"]:
+        showInfo("Notion Sync is already running.")
+        return
+    if mw.col is None:
+        showWarning("Notion Sync: no collection is open (no profile loaded).")
+        return
+
+    cfg = _config()
+    if not cfg.get("notion_pages"):
+        showWarning(
+            "Notion Sync: no pages configured.\n"
+            "Open Tools > Add-ons > 'Notion Sync (official API)' > Config and add "
+            "at least one page_id."
         )
-        if sync_interval_milliseconds:
-            self.timer.setInterval(sync_interval_milliseconds)
-            self.timer.timeout.connect(self.auto_sync)
-            self.timer.start()
-
-    def _validate_config(self, config: Optional[Dict[str, Any]]):
-        """Validate config.
-
-        :param config: config
-        :raises ValidationError: if config is invalid
-        """
-        if not config:
-            raise ValidationError('Config is empty')
-        # Load schema and validate configuration
-        with open(
-            BASE_DIR / 'schemas/config_schema.json', encoding='utf8'
-        ) as s:
-            schema = json.load(s)
-        validate(config, schema)
-
-    def get_valid_config(
-        self, config: Optional[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Get valid configuration.
-
-        :param config: configuration
-        :returns: either configuration provided (if it's valid) or default
-            config
-        """
-        try:
-            self._validate_config(config)
-        except ValidationError as exc:
-            showCritical(str(exc), title='Notion loader config load error')
-            assert mw  # mypy
-            default_config = mw.addonManager.addonConfigDefaults(str(BASE_DIR))
-            return cast(Dict[str, Any], default_config)
-        else:
-            assert config  # mypy
-            return config
-
-    def reload_config(self, new_config: Optional[Dict[str, Any]]) -> None:
-        """Reload configuration.
-
-        :param new_config: new configuration
-        """
-        if not new_config:
-            assert mw  # mypy
-            new_config = mw.addonManager.getConfig(__name__)
-        try:
-            self._validate_config(new_config)
-        except ValidationError as exc:
-            self.logger.error('Config update error', exc_info=exc)
-            showCritical(str(exc), title='Notion loader config update error')
-        else:
-            assert new_config  # mypy
-            self.config = new_config
-
-    def add_actions(self):
-        """Add Notion menu entry with actions to Tools menu."""
-        assert mw  # mypy
-        self.notion_menu = mw.form.menuTools.addMenu('Notion')
-        load_action = QAction('Load notes', mw)
-        load_action_and_remove_obsolete = QAction(
-            'Load notes and remove obsolete', mw
+        return
+    if not sync.resolve_token(cfg):
+        showWarning(
+            "Notion Sync: no API token found.\n\n"
+            "Set 'notion_token' in the add-on config, or the NOTION_API_TOKEN "
+            "environment variable, or a .env file containing NOTION_API_TOKEN=... ."
         )
-        load_action.triggered.connect(self.sync)
-        load_action_and_remove_obsolete.triggered.connect(
-            self.sync_and_remove_obsolete
+        return
+
+    _state["busy"] = True
+    mw.progress.start(label="Notion Sync: fetching from Notion...", immediate=True)
+
+    holder: Dict[str, Any] = {}
+    thread = threading.Thread(target=lambda: _fetch_worker(cfg, holder), daemon=True)
+    thread.start()
+    _poll_until_fetched(holder, then=lambda: _after_fetch(holder, remove_obsolete, preview_only))
+
+
+def _fetch_worker(cfg: dict, holder: Dict[str, Any]) -> None:
+    try:
+        holder["result"] = sync.fetch_pages(cfg)
+    except Exception as e:  # noqa: BLE001
+        holder["error"] = f"{e}\n{traceback.format_exc(limit=6)}"
+    holder["done"] = True
+
+
+def _poll_until_fetched(holder: Dict[str, Any], then) -> None:
+    """Light main-thread polling: continues as soon as the fetch thread ends."""
+    timer = QTimer(mw)
+    timer.setInterval(150)
+    timer.setSingleShot(False)
+
+    def tick():
+        if holder.get("done"):
+            timer.stop()
+            timer.deleteLater()
+            then()
+
+    timer.timeout.connect(tick)
+    timer.start()
+
+
+def _after_fetch(holder: Dict[str, Any], remove_obsolete: bool, preview_only: bool) -> None:
+    _state["busy"] = False
+    mw.progress.finish()
+    if "error" in holder:
+        showWarning(f"Notion Sync failed:\n{holder['error']}")
+        return
+    result = holder["result"]
+
+    for w in result.warnings:
+        showWarning(f"Notion Sync warning: {w}")
+
+    if preview_only:
+        lines = []
+        n_rows = 0
+        for p in result.pages:
+            n_rows += sum(len(t.rows) for t in p.tables)
+            lines.append(f"{p.deck_name}")
+            for t in p.tables:
+                lines.append(f"&nbsp;&nbsp;&nbsp;&bull; {t.title} ({len(t.rows)} rows)")
+        showInfo(
+            "<b>Notion Sync preview</b><br>"
+            + "<br>".join(lines)
+            + f"<br><br>Total rows: {n_rows}, media files: {len(result.media_files)}"
         )
-        self.notion_menu.addActions(
-            (load_action, load_action_and_remove_obsolete)
-        )
+        result.cleanup()
+        return
 
-    def seed_collection(self):
-        """Init collection and note manager after Anki loaded."""
-        assert mw  # mypy
-        self.collection = mw.col
-        if not self.collection:
-            self.logger.error('Collection is empty')
-            return
-        self.notes_manager = NotesManager(
-            collection=self.collection,
-            deck_name=self.config.get(
-                'anki_target_deck', self.DEFAULT_DECK_NAME
-            ),
-            debug=self.debug,
-        )
-        self.logger.info('Collection initialized')
-        self.existing_note_ids = self.notes_manager.existing_note_ids
-        self._collection_seeded = True
+    try:
+        mw.progress.start(label="Notion Sync: importing cards...", immediate=True)
+        stats = sync.apply_sync(mw.col, result, remove_obsolete)
+    finally:
+        mw.progress.finish()
+        result.cleanup()
 
-    def handle_worker_result(self, notes: List[AnkiNote]) -> None:
-        """Add notes to collection.
-
-        :param notes: notes
-        """
-        assert self.notes_manager  # mypy
-        try:
-            for note in notes:
-                if not note.front:
-                    self.logger.warning(
-                        'Note front is empty. Back: %s', safe_str(note.back)
-                    )
-                    continue
-                self._processed += 1
-                # Find out if note already exists
-                note_id = self.notes_manager.find_note(note)
-                if note_id:
-                    is_updated = self.notes_manager.update_note(note_id, note)
-                    if is_updated:
-                        self._updated += 1
-                # Create new note
-                else:
-                    note_id = self.notes_manager.create_note(note)
-                    self._created += 1
-                self.synced_note_ids.add(note_id)
-        except Exception:
-            error_msg = format_exc()
-            self._sync_errors.append(error_msg)
-
-    def handle_sync_finished(self) -> None:
-        """Handle sync finished.
-
-        In case of any error - show error message in manual mode and do nothing
-        otherwise.  If no error - save the collection and show sync statistics
-        in manual mode.  If `self._remove_obsolete_on_sync` is True - remove
-        all notes that is not added or updated in current sync.
-        """
-        assert self.notes_manager  # mypy
-        assert self.collection  # mypy
-        self._alive_workers -= 1
-        if self._alive_workers:
-            return
-        assert self.notion_menu  # mypy
-        self.notion_menu.setTitle('Notion')
-        # Show errors if manual sync
-        if self._sync_errors:
-            if not self._is_auto_sync:
-                error_msg = '\n'.join(self._sync_errors)
-                showCritical(error_msg, title='Loading from Notion failed')
-        # If no errors - save collection and refresh Anki window
-        else:
-            if self._remove_obsolete_on_sync:
-                ids_to_remove = self.existing_note_ids - self.synced_note_ids
-                if ids_to_remove:
-                    msg = (
-                        f'Will delete {len(ids_to_remove)} obsolete note(s), '
-                        f'continue?'
-                    )
-                    assert mw  # mypy
-                    do_delete = QMessageBox.question(
-                        mw,
-                        'Confirm deletion',
-                        msg,
-                        QMessageBox.StandardButton.Yes
-                        | QMessageBox.StandardButton.No,
-                    )
-                    if do_delete == QMessageBox.StandardButton.Yes.value:
-                        self.notes_manager.remove_notes(ids_to_remove)
-                        self._deleted += len(ids_to_remove)
-            self.collection.save(trx=False)
-            mw.maybeReset()  # type: ignore[union-attr]
-            mw.deckBrowser.refresh()  # type: ignore[union-attr]
-            stats = (
-                f'Processed: {self._processed}\n'
-                f'Created: {self._created}\n'
-                f'Updated: {self._updated}\n'
-                f'Deleted: {self._deleted}'
-            )
-            if not self._is_auto_sync:
-                showInfo(
-                    f'Successfully loaded:\n{stats}',
-                    title='Loading from Notion',
-                )
-        self.logger.info(
-            'Sync finished, processed=%s, created=%s, updated=%s, deleted=%s',
-            self._processed,
-            self._created,
-            self._updated,
-            self._deleted,
-        )
-        self._reset_stats()
-
-    def handle_worker_error(self, error_message) -> None:
-        """Handle worker error.
-
-        :param error_message: error message
-        """
-        self._sync_errors.append(error_message)
-
-    def auto_sync(self) -> None:
-        """Perform synchronization in background."""
-        self.logger.info('Auto sync started')
-        # Reload config
-        assert mw  # mypy
-        self.reload_config(None)
-        self._is_auto_sync = True
-        self._sync()
-
-    def sync(self) -> None:
-        """Perform synchronization and report result."""
-        self.logger.info('Sync started')
-        # Reload config
-        assert mw  # mypy
-        self.reload_config(None)
-        if not self._alive_workers:
-            self._is_auto_sync = False
-            self._sync()
-        else:
-            showInfo(
-                'Sync is already in progress, please wait',
-                title='Load from Notion',
-            )
-
-    def sync_and_remove_obsolete(self) -> None:
-        """Perform synchronization and remove obsolete notes."""
-        self.logger.info('Sync with remove obsolete started')
-        self._remove_obsolete_on_sync = True
-        self.sync()
-
-    def _reset_stats(self) -> None:
-        """Reset variables before sync.
-
-        Saves pre-sync existing note ids and resets sync stats and errors.
-        """
-        self._remove_obsolete_on_sync = False
-        self.synced_note_ids.clear()
-        assert self.notes_manager  # mypy
-        self.existing_note_ids = self.notes_manager.existing_note_ids
-        self._processed = self._created = self._updated = self._deleted = 0
-        self._sync_errors = []
-
-    def _sync(self) -> None:
-        """Start sync."""
-        if not self._collection_seeded:
-            self.logger.warning(
-                'Collection is not seeded yet, trying to seed now'
-            )
-            self.seed_collection()
-            if not self._collection_seeded:
-                return
-        assert self.notion_menu  # mypy
-        self.notion_menu.setTitle('Notion (syncing...)')
-        for page_spec in self.config.get('notion_pages', []):
-            page_id = page_spec['page_id']
-            recursive = page_spec.get('recursive', False)
-            page_id = normalize_block_id(page_id)
-            worker = NotesExtractorWorker(
-                notion_token=self.config['notion_token'],
-                page_id=page_id,
-                recursive=recursive,
-                notion_namespace=self.config.get('notion_namespace', ''),
-                debug=self.debug,
-            )
-            worker.signals.result.connect(self.handle_worker_result)
-            worker.signals.error.connect(self.handle_worker_error)
-            worker.signals.finished.connect(self.handle_sync_finished)
-            # Start worker
-            self.thread_pool.start(worker)
-            self._alive_workers += 1
+    n_tables = sum(len(p.tables) for p in result.pages)
+    summary = (
+        f"<b>Notion Sync finished.</b><br>"
+        f"{len(result.pages)} page(s) / {n_tables} table(s)<br>"
+        f"Added {stats['added']} &ndash; updated {stats['updated']} "
+        f"&ndash; removed {stats['removed']} &ndash; media {stats['media']}"
+    )
+    mw.reset()
+    showInfo(summary)
 
 
-class NoteExtractorSignals(QObject):
-    """The signals available from a running extractor thread."""
-
-    #: Extraction finished
-    finished = pyqtSignal()
-    #: Notes data
-    result = pyqtSignal(object)
-    #: Error
-    error = pyqtSignal(str)
+# --------------------------------------------------------------------- #
+# auto sync timer
+# --------------------------------------------------------------------- #
 
 
-class NotesExtractorWorker(QRunnable):
-    """Notes extractor worker thread."""
+def _schedule_autosync() -> None:
+    stop_autosync()
+    cfg = _config()
+    interval_minutes = int(cfg.get("sync_every_minutes") or 0)
+    if interval_minutes <= 0:
+        return
 
-    def __init__(
-        self,
-        notion_token: str,
-        page_id: str,
-        recursive: bool,
-        notion_namespace: str,
-        debug: bool = False,
-    ):
-        """Init notes extractor.
+    def on_tick() -> None:
+        if mw.col is not None and not _state["busy"]:
+            run_sync(remove_obsolete=False)
 
-        :param notion_token: Notion token
-        :param page_id: Notion page id
-        :param recursive: recursive export
-        :param notion_namespace: Notion namespace to form source links
-        :param debug: debug log level
-        """
-        super().__init__()
-        self.debug = debug
-        self.logger = get_logger(f'worker_{page_id}', self.debug)
-        self.signals = NoteExtractorSignals()
-        self.notion_token = notion_token
-        self.page_id = page_id
-        self.recursive = recursive
-        self.notion_namespace = notion_namespace
-
-    def run(self) -> None:
-        """Extract note data from given Notion page.
-
-        Export Notion page as HTML, extract notes data from the HTML and send
-        results.
-        """
-        self.logger.info('Worker started')
-        try:
-            with TemporaryDirectory() as tmp_dir:
-                # Export given Notion page as HTML
-                tmp_path = safe_path(Path(tmp_dir))
-                export_path = tmp_path / f'{self.page_id}.zip'
-                client = NotionClient(self.notion_token, self.debug)
-                client.export_page(
-                    page_id=self.page_id,
-                    destination=export_path,
-                    recursive=self.recursive,
-                )
-                self.logger.info(
-                    'Exported file downloaded: path=%s', str(export_path)
-                )
-                # Extract notes data from the HTML files
-                with zipfile.ZipFile(export_path) as zip_file:
-                    zip_file.extractall(tmp_path)
-                notes = []
-                for html_path in tmp_path.rglob('*.html'):
-                    notes += extract_notes_data(
-                        source=Path(html_path),
-                        notion_namespace=self.notion_namespace,
-                        debug=self.debug,
-                    )
-                self.logger.info('Notes extracted: count=%s', len(notes))
-        except NotionClientError as exc:
-            self.logger.error('Error extracting notes', exc_info=exc)
-            error_msg = f'Cannot export {self.page_id}:\n{exc}'
-            self.signals.error.emit(error_msg)
-        except OSError as exc:  # Long path
-            self.logger.warning('Error deleting files', exc_info=exc)
-            # Delete manually
-            rmtree(tmp_path, ignore_errors=True)
-        else:
-            self.signals.result.emit(notes)
-        finally:
-            self.signals.finished.emit()
+    timer = QTimer(mw)
+    timer.setInterval(interval_minutes * 60 * 1000)
+    timer.timeout.connect(on_tick)
+    timer.start()
+    _state["timer"] = timer
 
 
-NotionSyncPlugin()
+def stop_autosync() -> None:
+    timer = _state.get("timer")
+    if timer is not None:
+        timer.stop()
+        timer.deleteLater()
+        _state["timer"] = None
+
+
+# --------------------------------------------------------------------- #
+# menu
+# --------------------------------------------------------------------- #
+
+
+def _build_menu() -> None:
+    menu = QMenu(MENU_TITLE, mw)
+    mw.form.menuTools.addMenu(menu)
+
+    act_sync = QAction("Sync Now", mw)
+    act_sync.triggered.connect(lambda: run_sync(remove_obsolete=False))
+    menu.addAction(act_sync)
+
+    act_sync_rm = QAction("Sync && Remove Obsolete", mw)
+    act_sync_rm.triggered.connect(lambda: run_sync(remove_obsolete=True))
+    menu.addAction(act_sync_rm)
+
+    act_preview = QAction("Preview Structure", mw)
+    act_preview.triggered.connect(lambda: run_sync(preview_only=True))
+    menu.addAction(act_preview)
+
+
+if _IN_ANKI:
+    gui_hooks.profile_did_open.append(_schedule_autosync)
+    gui_hooks.profile_will_close.append(stop_autosync)
+    _build_menu()

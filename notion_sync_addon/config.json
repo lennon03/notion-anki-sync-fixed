@@ -1,8 +1,8 @@
 {
-  "debug": false,
-  "sync_every_minutes": 30,
-  "anki_target_deck": "Notion Sync",
   "notion_token": "",
-  "notion_namespace": "",
-  "notion_pages": [{"page_id": "ID", "recursive": true}]
+  "target_deck": "Notion Sync",
+  "notion_pages": [
+    { "page_id": "1bbf4336b2b480f4a0b6fc07ce4ee5e4", "recursive": false }
+  ],
+  "sync_every_minutes": 0
 }

@@ -1,88 +1,98 @@
-# Anki💗Notion addon
+# Anki💗Notion Sync (official API)
 
-It's an [Anki](https://apps.ankiweb.net/) addon that loads toggle lists from [Notion](https://notion.so) as notes to
-a specified deck.
-
-[![Supported versions](https://img.shields.io/badge/python-3.8%20%7C%203.9-blue)](https://github.com/9dogs/notion-anki-sync)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Codestyle: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+It's an [Anki](https://apps.ankiweb.net/) addon that creates Anki decks from
+[Notion](https://notion.so) pages using the **official Notion API** — no more
+fragile HTML export scraping.
 
 ## How it works
 
-Short demo and configuration how-to: [YouTube link](https://www.youtube.com/watch?v=5juto4BQSYc)
+- You configure a set of Notion **page ids** (or page URLs) in the addon config.
+- Every page becomes an Anki **deck**, named after the page.
+- Every **table** (inline database) on a page becomes a **subdeck**, named after the table.
+- Every **row** of a table becomes one card:
+  - **Front** = the row's title property
+  - **Back** = the full content of that row's page, converted to HTML.
 
-![TLDR](tldr.png)
+## Content conversion
 
-- You provide a set of Notion page ids to export
-- Every "toggle list" block from Notion will be converted to an Anki note
-- Title of the toggle block will become the front side and its content — the backside
-- The line starting with `#tags` will be parsed as tags
-- Ignore toggles by putting symbol ❕ in front of a toggle title (type ":!" in Notion and select the white one)
+The row pages can be marked up freely; everything below is supported:
 
-Clozes can be added via `code` blocks in toggle titles. Backside will be
-ignored (apart from tags).
-
-Synchronization can work in the background or can be triggered manually from the `Notion` submenu in the `Tools`
-section. Note that background sync **does not remove** any notes; if you want to remove the obsolete notes, then
-trigger `Load and remove obsolete` from the submenu.
+- paragraphs, headings, dividers, nested lists (bulleted / numbered / to-do)
+- toggle blocks → `<details>`, quotes, callouts (with colors)
+- **code blocks** → clean `<pre><code>` with a dark theme
+- **math blocks & inline LaTeX** → Anki-native MathJax (`\\[...\\]` / `\\(...\\)`)
+- **images / audio / video / attachments** → automatically downloaded and added
+  to your Anki media collection
+- inline tables → HTML tables, mentions & links, code formatting, bold/italic/etc.
 
 ## Requirements
 
 ### Notion API token
 
-To get **Notion API token** log in to Notion via a browser (assuming Chrome here),
-then press `Ctrl+Shift+I` to open Developer Tools, go to the "Application" tab
-and find `token_v2` under Cookie on the left.
+Notion API tokens are issued from Notion's official integration flow; you can
+find all the details on `notion.so/my-integrations`.
+
+Create an internal integration, copy its token, and **share your target pages
+with the integration** (page menu → Connections → select your integration).
+
+Provide the token in one of these places (first match wins):
+
+1. Addon config: Tools → Add-ons → "Notion Sync (official API)" → Config → `notion_token`
+2. Environment variable `NOTION_API_TOKEN`
+3. A `.env` file containing `NOTION_API_TOKEN=...`: inside the addon's
+   `user_files/` folder, next to the addon, in the CWD, or in your home directory.
 
 ### Notion page ids
 
-To get **Notion page id** open up the page in a browser and look at the
-address bar. 32 chars of gibberish after a page title is the page id:
-`https://www.notion.so/notion_user/My-Learning-Book-8a775ee482ab43732abc9319add819c5`
-➡ `8a775ee482ab43732abc9319add819c5`
+Open the page in a browser; the 32 hex characters at the end of the URL are the
+page id. You can also paste the full URL — it is parsed automatically:
 
-Edit plugin config file from Anki: `Tools ➡ Add-ons ➡ Notion Toggles Loader ➡ Config`
+```
+https://app.notion.com/p/Philo-Histoire-1bbf4336b2b480f4a0b6fc07ce4ee5e4
+```
+
+## Configuration
+
+Edit the config from Anki: `Tools ➡ Add-ons ➡ Notion Sync (official API) ➡ Config`
+
 ```json
 {
-  "debug": false,
-  "sync_every_minutes": 30,
-  "anki_target_deck": "Notion Sync",
-  "notion_token": "<your_notion_token_here>",
-  "notion_namespace": "<your_notion_username_here",
+  "notion_token": "",
+  "target_deck": "Notion Sync",
   "notion_pages": [
-    {
-      "page_id": "<page_id1>",
-      "recursive": false
-    },
-    {
-      "page_id": "<page_id2>",
-      "recursive": true
-    }
-  ]
+    { "page_id": "1bbf4336b2b480f4a0b6fc07ce4ee5e4", "recursive": false }
+  ],
+  "sync_every_minutes": 0
 }
 ```
 
-## Known issues & limitations
+- `target_deck`: parent deck for everything (default `"Notion Sync"`).
+- `notion_pages`: ids or URLs; `recursive: true` also turns direct sub-pages
+  into nested decks.
+- `sync_every_minutes`: background auto-sync interval, `0` disables it.
 
-Behind the scenes, the addon initiates Notion pages export to HTML, then parses the HTML into notes. Since non-public
-Notion API is used, the addon may break without a warning.
+## Menus (Tools ➡ Notion Sync)
 
-- As for now, LaTeX and plain text cannot be used in the same cloze: Notion puts them in separate `code` tags which
-  leads to the creation of two cloze blocks.
+- **Sync Now**: fetch from Notion and import; existing cards are updated.
+- **Sync && Remove Obsolete**: same, but cards whose Notion source is gone are deleted.
+- **Preview Structure**: dry run — shows the deck tree, row counts and media
+  without writing anything.
 
-- Some toggle blocks are empty on export which leads to empty Anki notes. The issue is on the Notion side (and they're
-  aware of it).
+Cards are tracked by their Notion page id (stored in a hidden `Source` field),
+so repeated syncs update in place instead of creating duplicates.
 
-## Configuration parameters
+## Development
 
-- `debug`: `bool [default: false]` — enable debug logging to file.
-- `sync_every_minutes`: `int [default: 30]` — auto sync interval in minutes. Set to 0 to disable auto sync.
-- `anki_target_deck`: `str [default: "Notion Sync"]` — the deck loaded notes will be added to.
-- `notion_token`: `str [default: None]` — Notion APIv2 token.
-- `notion_namespace`: `str [default: None]` — Notion namespace (your username) to form source URLs.
-- `notion_pages`: `array [default: [] ]` — List of Notion pages to export notes from.
+```bash
+make fmt    # black + isort
+make lint   # black, isort, flake8, pydocstyle, mypy
+make test   # pytest with coverage
+```
 
+Unit tests do not require Anki installed (the collection/aqt layer is imported
+lazily).
 
 ## Inspiration
 
-This project is inspired by a great [Notion to Anki](https://github.com/alemayhu/Notion-to-Anki).
+This project replaces the original toggle-scraping addon and is inspired by a
+great [Notion to Anki](https://github.com/alemayhu/Notion-to-Anki).

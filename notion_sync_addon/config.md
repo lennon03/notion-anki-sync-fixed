@@ -1,35 +1,38 @@
-# Configuration
+# Notion Sync (official API)
 
-- `debug: bool [default: false]` — enable debug logging to file.
-- `sync_every_minutes: int [default: 30]` — auto sync interval in minutes. Set to 0 to disable auto sync.
-- `anki_target_deck: str [default: "Notion Sync"]` — the deck loaded notes will be added to.
-- `notion_token: str [default: None]` — Notion APIv2 token (see below).
-- `notion_namespace: str [default: None]` — Notion namespace (your username) to form source URLs.
-- `notion_pages: array [default: [] ]` — List of Notion pages to export notes from (see below).
+Creates decks from your Notion workspace using the **official Notion API**
+(`2025-09-03`) and imports them directly into your collection.
 
-## Notion token
+## Structure
 
-To get **Notion API token** log in to Notion via a browser (assuming Chrome here),
-then press `Ctrl+Shift+I` to open Developer Tools, go to the "Application" tab
-and find `token_v2` under Cookie on the left.
+- Every configured Notion **page** becomes a **deck** named after the page,
+  under `target_deck`.
+- Every **table** (inline database) on the page becomes a **subdeck**.
+- Every **row** of a table becomes a card:
+  - **Front** = the row's title property
+  - **Back** = the full content of that row's page, converted to HTML
+    (paragraphs, lists, toggles, quotes, callouts, tables, code blocks,
+    MathJax for backend/in-block LaTeX, imported images/sound/pdf).
 
-## Notion pages
-The `notion_pages` section should look like that:
-```json
-...
-"notion_pages": [
-    {
-      "page_id": "<page_id1>",
-      "recursive": false
-    },
-    {
-      "page_id": "<page_id2>",
-      "recursive": true
-    }
-  ]
-```
-To get **Notion page id** open up the page in a browser and look at the
-address bar. 32 chars of gibberish after a page title is the page id:
-`https://www.notion.so/notion_user/My-Learning-Book-8a775ee482ab43732abc9319add819c5`
-➡ `8a775ee482ab43732abc9319add819c5`
-Parameter `recursice` indicates whether page should include its subpages.
+## Config
+
+- `notion_token`: internal integration token
+  (https://www.notion.so/my-integrations). Share your pages with the
+  integration! Leave empty to use the `NOTION_API_TOKEN` environment
+  variable or a `.env` file containing `NOTION_API_TOKEN=...` next to
+  the addon (or in `user_files/`).
+- `target_deck`: parent deck, default `"Notion Sync"`.
+- `notion_pages`: list of `{ "page_id": "<id-or-url>", "recursive": true|false }`.
+  Page ids can be raw ids, dashed ids or page URLs.
+  `recursive` also turns direct sub-pages of the page into nested decks.
+- `sync_every_minutes`: background auto-sync interval, `0` disables.
+
+## Menus (Tools > Notion Sync)
+
+- **Sync Now**: fetch & import, keep notes already removed from Notion untouched.
+- **Sync & Remove Obsolete**: same, but also deletes notes whose Notion source
+  was deleted.
+- **Preview Structure**: dry run showing decks/tables/row counts, no writes.
+
+Notes are identified by their Notion page id stored in the hidden `Source`
+field, so repeated syncs update existing cards instead of duplicating them.
