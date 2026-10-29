@@ -18,7 +18,7 @@ try:
     from aqt.qt import (
         QAction, QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
         QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-        QSpinBox, QStyle, QTimer, QToolButton, QVBoxLayout, QLineEdit,
+        QSpinBox, QTimer, QVBoxLayout, QLineEdit,
     )
     from aqt.utils import showInfo, showWarning
 
@@ -249,6 +249,49 @@ def _open_settings() -> None:
     dialog = QDialog(mw)
     dialog.setWindowTitle("Notion Sync Settings")
     dialog.setMinimumWidth(560)
+    dialog.setStyleSheet(
+        """
+        QDialog { background: #f7f8fb; color: #242733; }
+        QLabel { color: #242733; }
+        QGroupBox {
+            background: #ffffff; border: 1px solid #e1e4ec;
+            border-radius: 12px; margin-top: 12px; padding: 14px;
+            font-weight: 600;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin; left: 14px; padding: 0 6px;
+            color: #596174;
+        }
+        QLineEdit, QListWidget, QSpinBox {
+            background: #ffffff; border: 1px solid #d6dae5;
+            border-radius: 8px; padding: 8px; color: #242733;
+        }
+        QLineEdit:focus, QListWidget:focus, QSpinBox:focus {
+            border: 1px solid #6d63d8;
+        }
+        QListWidget::item { padding: 8px; border-radius: 6px; }
+        QListWidget::item:selected { background: #ebe9ff; color: #37317d; }
+        QCheckBox { spacing: 9px; color: #242733; padding: 5px 0; }
+        QCheckBox::indicator {
+            width: 18px; height: 18px; border-radius: 5px;
+            border: 1px solid #b8bdca; background: #ffffff;
+        }
+        QCheckBox::indicator:checked {
+            background: #665bd3; border-color: #665bd3;
+        }
+        QPushButton {
+            background: #ffffff; border: 1px solid #d6dae5;
+            border-radius: 8px; padding: 8px 15px; color: #34394a;
+        }
+        QPushButton:hover { background: #f0efff; border-color: #9c96e8; }
+        QPushButton:pressed { background: #e4e1ff; }
+        QPushButton#primary {
+            background: #665bd3; border-color: #665bd3;
+            color: #ffffff; font-weight: 600;
+        }
+        QPushButton#primary:hover { background: #574cc5; }
+        """
+    )
     layout = QVBoxLayout(dialog)
     layout.setSpacing(12)
 
@@ -275,7 +318,28 @@ def _open_settings() -> None:
     interval.setSuffix(" min")
     interval.setSpecialValueText("Off")
     interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
+    autosync = QCheckBox("Enable automatic sync")
+    autosync.setChecked(interval.value() > 0)
+    behavior_form.addRow("", autosync)
     behavior_form.addRow("Auto-sync interval", interval)
+    last_interval = {"value": interval.value() or 60}
+
+    def toggle_autosync(enabled: bool) -> None:
+        if enabled:
+            interval.setValue(last_interval["value"])
+        else:
+            if interval.value() > 0:
+                last_interval["value"] = interval.value()
+            interval.setValue(0)
+        interval.setEnabled(enabled)
+
+    def remember_interval(value: int) -> None:
+        if value > 0:
+            last_interval["value"] = value
+
+    interval.valueChanged.connect(remember_interval)
+    autosync.toggled.connect(toggle_autosync)
+    interval.setEnabled(autosync.isChecked())
     empty_cards = QCheckBox("Add rows without a title as empty cards")
     empty_cards.setChecked(bool(cfg.get("include_empty_cards", True)))
     empty_cards.setToolTip(
@@ -309,9 +373,8 @@ def _open_settings() -> None:
     pages_layout.addLayout(add_row)
 
     page_actions = QHBoxLayout()
-    remove_button = QToolButton()
+    remove_button = QPushButton("Remove selected")
     remove_button.setText("Remove selected")
-    remove_button.setIcon(dialog.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
     remove_button.setEnabled(False)
     page_actions.addWidget(remove_button)
     page_actions.addStretch(1)
@@ -360,6 +423,7 @@ def _open_settings() -> None:
 
     buttons = QHBoxLayout()
     save = QPushButton("Save settings")
+    save.setObjectName("primary")
     cancel = QPushButton("Cancel")
     save.setDefault(True)
     buttons.addStretch(1)
