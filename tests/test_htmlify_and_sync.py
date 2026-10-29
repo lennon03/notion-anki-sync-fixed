@@ -4,6 +4,7 @@ import os
 from notion_sync_addon.htmlify import MediaCollector, render_blocks
 from notion_sync_addon.notion_api import NotionClient
 from notion_sync_addon.sync import (
+    MODEL_CSS,
     _get_or_create_model,
     _fetch_table,
     _remove_obsolete,
@@ -49,14 +50,15 @@ def test_inline_rich_text_annotations():
 def test_code_block_and_math_block():
     out = render_blocks([
         {"type": "code", "has_children": False, "id": "c1",
-         "code": {"rich_text": [{"type": "text", "plain_text": "def f():\n  pass",
-                                 "text": {"content": "def f():\n  pass"},
+         "code": {"rich_text": [{"type": "text", "plain_text": "def f():\n  return <tag>",
+                                 "text": {"content": "def f():\n  return <tag>"},
                                  "annotations": {}}], "language": "python"}},
         {"type": "equation", "has_children": False, "id": "e1",
          "equation": {"expression": "e^{i\\pi}+1=0"}},
     ], MediaCollector(), FakeTree())
-    assert "<pre" in out and "<code>def f():<br>  pass</code></pre>" not in out  # code is escaped, not <br>
-    assert "def f():\n  pass" in out
+    assert '<pre class="ns-code" style="' in out
+    assert "background:#f6f7f8" in out
+    assert "<code>def f():\n  return &lt;tag&gt;</code></pre>" in out
     assert "\\[e^{i\\pi}+1=0\\]" in out
 
 
@@ -197,6 +199,32 @@ def test_model_creation_leaves_backend_managed_id():
 
     model = _get_or_create_model(Collection())
     assert model["id"] == 0
+    assert model["css"] == MODEL_CSS
+    assert MODEL_CSS == (
+        ".card { font-family: arial; font-size: 20px; line-height: 1.5; "
+        "text-align: center; color: black; background-color: white; }"
+    )
+
+
+def test_existing_model_css_is_updated():
+    class Models:
+        def __init__(self):
+            self.saved = []
+
+        def by_name(self, name):
+            return {"css": ".card { text-align: left; }"}
+
+        def save(self, model):
+            self.saved.append(model)
+
+    class Collection:
+        def __init__(self):
+            self.models = Models()
+
+    col = Collection()
+    model = _get_or_create_model(col)
+    assert model["css"] == MODEL_CSS
+    assert col.models.saved == [model]
 
 
 def test_obsolete_cleanup_keeps_manual_cards():

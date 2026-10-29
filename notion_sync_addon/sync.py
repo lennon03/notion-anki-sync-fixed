@@ -340,13 +340,21 @@ def _sniff_ext(blob: bytes) -> str:
 # Phase 2: write to Anki collection
 # --------------------------------------------------------------------- #
 
-MODEL_CSS = ".card { text-align: left; }"
+MODEL_CSS = (
+    ".card { font-family: arial; font-size: 20px; line-height: 1.5; "
+    "text-align: center; color: black; background-color: white; }"
+)
 
 
 def _get_or_create_model(col) -> dict:
     """Find or build the 'Notion Sync Card' note type."""
     model = col.models.by_name(MODEL_NAME)
     if model is not None:
+        if model.get("css") != MODEL_CSS:
+            model["css"] = MODEL_CSS
+            save = getattr(col.models, "save", None)
+            if save is not None:
+                save(model)
         return model
 
     model = col.models.new(MODEL_NAME)

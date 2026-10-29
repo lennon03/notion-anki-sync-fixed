@@ -145,6 +145,12 @@ _BLOCK_BODY_TYPES = (
     "file", "audio", "bookmark", "embed", "link_preview", "divider",
 )
 
+_CODE_BLOCK_STYLE = (
+    "display:block; overflow-x:auto; padding:12px; margin:8px 0; "
+    "background:#f6f7f8; border:1px solid #dfe3e6; border-radius:6px; "
+    "text-align:left; white-space:pre-wrap;"
+)
+
 
 def render_blocks(blocks: List[dict], media: MediaCollector, tree: Any) -> str:
     """Render a flat list of block dicts (linked children via `tree`).
@@ -223,7 +229,10 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
     if btype == "code":
         content = _plain(body.get("rich_text") or [])
         lang = html.escape(body.get("language", "plain text"), quote=True)
-        return f'<pre class="ns-code"><code>{html.escape(content)}</code></pre>'
+        return (
+            f'<pre class="ns-code" style="{_CODE_BLOCK_STYLE}">'
+            f'<code>{html.escape(content)}</code></pre>'
+        )
     if btype == "equation":
         return "<div class='ns-eq'>\\[" + body.get("expression", "") + "\\]</div>"
     if btype == "divider":
