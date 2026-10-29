@@ -319,7 +319,7 @@ def _open_settings() -> None:
     behavior_layout = QVBoxLayout(behavior)
     interval = QSpinBox()
     interval.setRange(0, 10080)
-    interval.setSuffix(" min")
+    interval.setSuffix(" minutes")
     interval.setSpecialValueText("Off")
     interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
     interval_label = QLabel("Auto-sync interval (0 = off)")
