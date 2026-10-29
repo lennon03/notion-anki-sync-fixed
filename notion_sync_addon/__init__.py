@@ -12,13 +12,14 @@ import traceback
 from typing import Any, Dict
 
 from . import sync
+from .notion_api import NotionClient, page_title
 
 try:
     from aqt import gui_hooks, mw
     from aqt.qt import (
         QAction, QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
-        QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
-        QSpinBox, QTimer, QVBoxLayout, QLineEdit,
+        QLabel, QHeaderView, QMenu, QMessageBox, QPushButton, QSpinBox,
+        QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QLineEdit,
     )
     from aqt.utils import showInfo, showWarning
 
@@ -338,17 +339,36 @@ def _open_settings() -> None:
     hint = QLabel("Add a page URL or its 32-character ID.")
     hint.setStyleSheet("color: palette(mid);")
     pages_layout.addWidget(hint)
-    pages = QListWidget()
+    pages = QTableWidget(0, 2)
+    pages.setHorizontalHeaderLabels(["Page", "ID"])
     pages.setMinimumHeight(130)
     pages.setAlternatingRowColors(True)
-    pages.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+    pages.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+    pages.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+    pages.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+    pages.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+    pages.verticalHeader().setVisible(False)
+
+    def page_name(page_id: str) -> str:
+        try:
+            client = NotionClient(sync.resolve_token({"notion_token": token.text()}))
+            return page_title(client.get_page(page_id)) or "Untitled page"
+        except Exception:
+            return "Name unavailable"
+
+    def add_page_row(page_id: str, name: str = "") -> None:
+        row = pages.rowCount()
+        pages.insertRow(row)
+        pages.setItem(row, 0, QTableWidgetItem(name or page_name(page_id)))
+        pages.setItem(row, 1, QTableWidgetItem(page_id))
+
     for entry in cfg.get("notion_pages", []):
         value = entry if isinstance(entry, str) else entry.get("page_id", "")
         if value:
             try:
-                pages.addItem(QListWidgetItem(sync.canonical_page_id(str(value))))
+                add_page_row(sync.canonical_page_id(str(value)))
             except sync.NotionError:
-                pages.addItem(QListWidgetItem(str(value)))
+                add_page_row(str(value), "Invalid page ID")
     pages_layout.addWidget(pages)
 
     add_row = QHBoxLayout()
@@ -371,15 +391,15 @@ def _open_settings() -> None:
     layout.addWidget(pages_group)
 
     def update_page_state() -> None:
-        page_count.setText(f"{pages.count()} page(s)")
-        remove_button.setEnabled(pages.currentItem() is not None)
+        page_count.setText(f"{pages.rowCount()} page(s)")
+        remove_button.setEnabled(pages.currentRow() >= 0)
 
     pages.itemSelectionChanged.connect(update_page_state)
 
     def remove_page() -> None:
         row = pages.currentRow()
         if row >= 0:
-            pages.takeItem(row)
+            pages.removeRow(row)
             update_page_state()
 
     remove_button.clicked.connect(remove_page)
@@ -394,13 +414,13 @@ def _open_settings() -> None:
             QMessageBox.warning(dialog, "Invalid page", str(exc))
             return
         existing_ids = {
-            sync.canonical_page_id(pages.item(i).text())
-            for i in range(pages.count())
+            pages.item(i, 1).text()
+            for i in range(pages.rowCount())
         }
         if page_id in existing_ids:
             QMessageBox.information(dialog, "Already added", "That page is already in the list.")
             return
-        pages.addItem(QListWidgetItem(page_id))
+        add_page_row(page_id)
         page_input.clear()
         update_page_state()
 
@@ -409,7 +429,10 @@ def _open_settings() -> None:
     update_page_state()
 
     def save_config() -> None:
-        values = [pages.item(i).text().strip() for i in range(pages.count())]
+        values = [
+            pages.item(i, 1).text().strip()
+            for i in range(pages.rowCount())
+        ]
         if not values:
             QMessageBox.warning(dialog, "Missing pages", "Add at least one Notion page.")
             return False
