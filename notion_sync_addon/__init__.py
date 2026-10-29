@@ -251,54 +251,58 @@ def _open_settings() -> None:
     dialog.setMinimumWidth(560)
     dialog.setStyleSheet(
         """
-        QDialog { background: #f7f8fb; color: #242733; }
-        QLabel { color: #242733; }
+        QDialog { background: #ffffff; color: #18181b; }
+        QLabel { color: #18181b; font-size: 13px; }
         QGroupBox {
-            background: #ffffff; border: 1px solid #e1e4ec;
-            border-radius: 12px; margin-top: 12px; padding: 14px;
-            font-weight: 600;
+            background: #ffffff; border: 0; border-top: 1px solid #e4e4e7;
+            border-radius: 0; margin-top: 16px; padding: 14px 0 0;
+            font-weight: 600; font-size: 13px;
         }
         QGroupBox::title {
-            subcontrol-origin: margin; left: 14px; padding: 0 6px;
-            color: #596174;
+            subcontrol-origin: margin; left: 0; padding: 0 8px 0 0;
+            color: #18181b;
         }
         QLineEdit, QListWidget, QSpinBox {
-            background: #ffffff; border: 1px solid #d6dae5;
-            border-radius: 8px; padding: 8px; color: #242733;
+            background: #ffffff; border: 1px solid #e4e4e7;
+            border-radius: 8px; padding: 8px; color: #18181b;
+            font-size: 13px;
         }
         QLineEdit:focus, QListWidget:focus, QSpinBox:focus {
-            border: 1px solid #6d63d8;
+            border: 1px solid #18181b;
         }
         QListWidget::item { padding: 8px; border-radius: 6px; }
-        QListWidget::item:selected { background: #ebe9ff; color: #37317d; }
-        QCheckBox { spacing: 9px; color: #242733; padding: 5px 0; }
+        QListWidget::item:selected { background: #f4f4f5; color: #18181b; }
+        QCheckBox { spacing: 9px; color: #18181b; padding: 5px 0; font-size: 13px; }
         QCheckBox::indicator {
-            width: 18px; height: 18px; border-radius: 5px;
-            border: 1px solid #b8bdca; background: #ffffff;
+            width: 16px; height: 16px; border-radius: 4px;
+            border: 1px solid #a1a1aa; background: #ffffff;
         }
         QCheckBox::indicator:checked {
-            background: #665bd3; border-color: #665bd3;
+            background: #18181b; border-color: #18181b;
         }
         QPushButton {
-            background: #ffffff; border: 1px solid #d6dae5;
-            border-radius: 8px; padding: 8px 15px; color: #34394a;
+            background: #ffffff; border: 1px solid #e4e4e7;
+            border-radius: 8px; padding: 8px 15px; color: #18181b;
+            font-size: 13px;
         }
-        QPushButton:hover { background: #f0efff; border-color: #9c96e8; }
-        QPushButton:pressed { background: #e4e1ff; }
+        QPushButton:hover { background: #f4f4f5; border-color: #a1a1aa; }
+        QPushButton:pressed { background: #e4e4e7; }
         QPushButton#primary {
-            background: #665bd3; border-color: #665bd3;
-            color: #ffffff; font-weight: 600;
+            background: #18181b; border-color: #18181b;
+            color: #fafafa; font-weight: 500;
         }
-        QPushButton#primary:hover { background: #574cc5; }
+        QPushButton#primary:hover { background: #3f3f46; }
         """
     )
     layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(20, 20, 20, 16)
     layout.setSpacing(12)
 
     intro = QLabel(
         "<h2>Notion Sync</h2>"
         "<p>Choose the pages to sync and how often Anki should check Notion.</p>"
     )
+    intro.setObjectName("intro")
     intro.setWordWrap(True)
     layout.addWidget(intro)
 
