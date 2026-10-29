@@ -36,6 +36,13 @@ share each target page with it. Enter the token in the settings panel, or use
 Auto-sync is disabled by default and can be enabled in Settings with an
 interval in minutes.
 
+## Related project
+
+For a complementary workflow, [Notion Philo Workflow](https://notion-philo-workflow.vercel.app/)
+can export the cards to PDF in order to print them. See its
+[GitHub repository](https://github.com/lennon03/notion-philo-workflow) for the
+source and usage details.
+
 ## Development
 
 ```bash
