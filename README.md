@@ -17,8 +17,6 @@ disabled in Settings.
 
 ![Notion Sync settings](docs/settings.png)
 
-![Example Notion page structure](docs/notion-structure.png)
-
 Each Notion page becomes a deck, each table becomes a subdeck, and each row
 becomes a card. Synced cards are updated or removed when their Notion source
 disappears. Decks and manually created cards are never deleted.
@@ -26,18 +24,14 @@ disappears. Decks and manually created cards are never deleted.
 Notion content supports formatting, lists, code, MathJax, links, and imported
 images, audio, video, and attachments. Cards use Anki's normal styling.
 
-## Contenu pris en charge
+## Supported content
 
-Les cartes peuvent contenir :
+Cards can contain:
 
-- des formules **MathJax** ;
-- du **code** avec une mise en forme lisible ;
-- des **images** importées depuis Notion ;
-- des **tableaux** avec bordures et cellules espacées.
-
-![MathJax, code, image et tableau](docs/supported-content.png)
-
-![Card preview](docs/preview.png)
+- **MathJax** formulas;
+- **code** with readable formatting;
+- **images** imported from Notion;
+- **tables** with borders and cell spacing.
 
 ## Related project
 
