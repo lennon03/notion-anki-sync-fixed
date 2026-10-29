@@ -313,7 +313,22 @@ def _open_settings() -> None:
     token.setEchoMode(QLineEdit.EchoMode.Password)
     token.setPlaceholderText("Paste your Notion integration token")
     token.setClearButtonEnabled(True)
-    connection_form.addRow("Notion token", token)
+    token_row = QHBoxLayout()
+    token_row.setContentsMargins(0, 0, 0, 0)
+    show_token = QPushButton("Show")
+    show_token.setCheckable(True)
+    show_token.setFixedWidth(70)
+    token_row.addWidget(token)
+    token_row.addWidget(show_token)
+
+    def toggle_token(visible: bool) -> None:
+        token.setEchoMode(
+            QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        )
+        show_token.setText("Hide" if visible else "Show")
+
+    show_token.toggled.connect(toggle_token)
+    connection_form.addRow("Notion token", token_row)
     layout.addWidget(connection)
 
     behavior = QGroupBox("Sync behavior")
