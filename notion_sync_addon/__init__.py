@@ -2,9 +2,8 @@
 """Notion Sync addon - official Notion API -> Anki.
 
 Structure created in your collection:
-  target deck (config) -> a deck per configured Notion page
-    -> a subdeck per table in that page
-      -> one card per row (Front = title column, Back = row page content)
+  a deck per configured Notion page -> a subdeck per table
+    -> one card per row
 """
 from __future__ import annotations
 
@@ -16,7 +15,11 @@ from . import sync
 
 try:
     from aqt import gui_hooks, mw
-    from aqt.qt import QAction, QMenu, QTimer
+    from aqt.qt import (
+        QAction, QCheckBox, QDialog, QFormLayout, QHBoxLayout, QLabel,
+        QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QTimer,
+        QVBoxLayout,
+    )
     from aqt.utils import showInfo, showWarning
 
     _IN_ANKI = True
@@ -40,7 +43,7 @@ def _config() -> dict:
 # --------------------------------------------------------------------- #
 
 
-def run_sync(remove_obsolete: bool = False, preview_only: bool = False) -> None:
+def run_sync() -> None:
     if _state["busy"]:
         showInfo("Notion Sync is already running.")
         return
@@ -70,7 +73,7 @@ def run_sync(remove_obsolete: bool = False, preview_only: bool = False) -> None:
     holder: Dict[str, Any] = {}
     thread = threading.Thread(target=lambda: _fetch_worker(cfg, holder), daemon=True)
     thread.start()
-    _poll_until_fetched(holder, then=lambda: _after_fetch(holder, remove_obsolete, preview_only))
+    _poll_until_fetched(holder, then=lambda: _after_fetch(holder))
 
 
 def _fetch_worker(cfg: dict, holder: Dict[str, Any]) -> None:
@@ -97,7 +100,7 @@ def _poll_until_fetched(holder: Dict[str, Any], then) -> None:
     timer.start()
 
 
-def _after_fetch(holder: Dict[str, Any], remove_obsolete: bool, preview_only: bool) -> None:
+def _after_fetch(holder: Dict[str, Any]) -> None:
     _state["busy"] = False
     mw.progress.finish()
     if "error" in holder:
@@ -108,25 +111,9 @@ def _after_fetch(holder: Dict[str, Any], remove_obsolete: bool, preview_only: bo
     for w in result.warnings:
         showWarning(f"Notion Sync warning: {w}")
 
-    if preview_only:
-        lines = []
-        n_rows = 0
-        for p in result.pages:
-            n_rows += sum(len(t.rows) for t in p.tables)
-            lines.append(f"{p.deck_name}")
-            for t in p.tables:
-                lines.append(f"&nbsp;&nbsp;&nbsp;&bull; {t.title} ({len(t.rows)} rows)")
-        showInfo(
-            "<b>Notion Sync preview</b><br>"
-            + "<br>".join(lines)
-            + f"<br><br>Total rows: {n_rows}, media files: {len(result.media_files)}"
-        )
-        result.cleanup()
-        return
-
     try:
         mw.progress.start(label="Notion Sync: importing cards...", immediate=True)
-        stats = sync.apply_sync(mw.col, result, remove_obsolete)
+        stats = sync.apply_sync(mw.col, result)
     finally:
         mw.progress.finish()
         result.cleanup()
@@ -150,13 +137,13 @@ def _after_fetch(holder: Dict[str, Any], remove_obsolete: bool, preview_only: bo
 def _schedule_autosync() -> None:
     stop_autosync()
     cfg = _config()
-    interval_minutes = int(cfg.get("sync_every_minutes") or 0)
+    interval_minutes = int(cfg.get("sync_every_minutes") or 0) if cfg.get("autosync") else 0
     if interval_minutes <= 0:
         return
 
     def on_tick() -> None:
         if mw.col is not None and not _state["busy"]:
-            run_sync(remove_obsolete=False)
+            run_sync()
 
     timer = QTimer(mw)
     timer.setInterval(interval_minutes * 60 * 1000)
@@ -174,8 +161,93 @@ def stop_autosync() -> None:
 
 
 # --------------------------------------------------------------------- #
-# menu
+# settings dialog and menu
 # --------------------------------------------------------------------- #
+
+
+def _open_settings() -> None:
+    cfg = _config()
+    dialog = QDialog(mw)
+    dialog.setWindowTitle("Notion Sync Settings")
+    layout = QVBoxLayout(dialog)
+    form = QFormLayout()
+
+    token = QLineEdit(str(cfg.get("notion_token") or ""))
+    token.setEchoMode(QLineEdit.EchoMode.Password)
+    token.setPlaceholderText("secret_...")
+    form.addRow("Notion token:", token)
+
+    autosync = QCheckBox("Enable automatic sync")
+    autosync.setChecked(bool(cfg.get("autosync", False)))
+    form.addRow("", autosync)
+
+    interval = QSpinBox()
+    interval.setRange(1, 10080)
+    interval.setSuffix(" minutes")
+    interval.setValue(max(1, int(cfg.get("sync_every_minutes") or 60)))
+    interval.setEnabled(autosync.isChecked())
+    autosync.toggled.connect(interval.setEnabled)
+    form.addRow("Sync interval:", interval)
+    layout.addLayout(form)
+
+    layout.addWidget(QLabel("Notion pages"))
+    pages = QListWidget()
+    for entry in cfg.get("notion_pages", []):
+        value = entry if isinstance(entry, str) else entry.get("page_id", "")
+        if value:
+            pages.addItem(str(value))
+    layout.addWidget(pages)
+
+    add_row = QHBoxLayout()
+    page_input = QLineEdit()
+    page_input.setPlaceholderText("Notion page URL or 32-character ID")
+    add_button = QPushButton("Add")
+    add_row.addWidget(page_input)
+    add_row.addWidget(add_button)
+    layout.addLayout(add_row)
+
+    def add_page() -> None:
+        raw = page_input.text().strip()
+        if not raw:
+            return
+        try:
+            sync.canonical_page_id(raw)
+        except sync.NotionError as exc:
+            QMessageBox.warning(dialog, "Invalid page", str(exc))
+            return
+        pages.addItem(raw)
+        page_input.clear()
+
+    add_button.clicked.connect(add_page)
+
+    buttons = QHBoxLayout()
+    save = QPushButton("Save")
+    cancel = QPushButton("Cancel")
+    buttons.addStretch(1)
+    buttons.addWidget(cancel)
+    buttons.addWidget(save)
+    layout.addLayout(buttons)
+    cancel.clicked.connect(dialog.reject)
+
+    def save_config() -> None:
+        values = [pages.item(i).text().strip() for i in range(pages.count())]
+        if not values:
+            QMessageBox.warning(dialog, "Missing pages", "Add at least one Notion page.")
+            return
+        mw.addonManager.writeConfig(
+            __name__,
+            {
+                "notion_token": token.text().strip(),
+                "notion_pages": values,
+                "autosync": autosync.isChecked(),
+                "sync_every_minutes": interval.value() if autosync.isChecked() else 0,
+            },
+        )
+        _schedule_autosync()
+        dialog.accept()
+
+    save.clicked.connect(save_config)
+    dialog.exec()
 
 
 def _build_menu() -> None:
@@ -183,16 +255,12 @@ def _build_menu() -> None:
     mw.form.menuTools.addMenu(menu)
 
     act_sync = QAction("Sync Now", mw)
-    act_sync.triggered.connect(lambda: run_sync(remove_obsolete=False))
+    act_sync.triggered.connect(run_sync)
     menu.addAction(act_sync)
 
-    act_sync_rm = QAction("Sync && Remove Obsolete", mw)
-    act_sync_rm.triggered.connect(lambda: run_sync(remove_obsolete=True))
-    menu.addAction(act_sync_rm)
-
-    act_preview = QAction("Preview Structure", mw)
-    act_preview.triggered.connect(lambda: run_sync(preview_only=True))
-    menu.addAction(act_preview)
+    act_settings = QAction("Settings", mw)
+    act_settings.triggered.connect(_open_settings)
+    menu.addAction(act_settings)
 
 
 if _IN_ANKI:

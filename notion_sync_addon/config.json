@@ -1,8 +1,6 @@
 {
   "notion_token": "",
-  "target_deck": "Notion Sync",
-  "notion_pages": [
-    { "page_id": "1bbf4336b2b480f4a0b6fc07ce4ee5e4", "recursive": false }
-  ],
+  "notion_pages": [],
+  "autosync": false,
   "sync_every_minutes": 0
 }

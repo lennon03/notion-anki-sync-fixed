@@ -1,38 +1,27 @@
 # Notion Sync (official API)
 
-Creates decks from your Notion workspace using the **official Notion API**
+Creates decks from your Notion workspace using the official Notion API
 (`2025-09-03`) and imports them directly into your collection.
 
 ## Structure
 
-- Every configured Notion **page** becomes a **deck** named after the page,
-  under `target_deck`.
-- Every **table** (inline database) on the page becomes a **subdeck**.
-- Every **row** of a table becomes a card:
-  - **Front** = the row's title property
-  - **Back** = the full content of that row's page, converted to HTML
-    (paragraphs, lists, toggles, quotes, callouts, tables, code blocks,
-    MathJax for backend/in-block LaTeX, imported images/sound/pdf).
+- Every configured Notion page becomes an Anki deck named after the page.
+- Every table on the page becomes a subdeck.
+- Every row of a table becomes a card with the title on the front and the
+  row page content converted to HTML on the back.
 
 ## Config
 
-- `notion_token`: internal integration token
-  (https://www.notion.so/my-integrations). Share your pages with the
-  integration! Leave empty to use the `NOTION_API_TOKEN` environment
-  variable or a `.env` file containing `NOTION_API_TOKEN=...` next to
-  the addon (or in `user_files/`).
-- `target_deck`: parent deck, default `"Notion Sync"`.
-- `notion_pages`: list of `{ "page_id": "<id-or-url>", "recursive": true|false }`.
-  Page ids can be raw ids, dashed ids or page URLs.
-  `recursive` also turns direct sub-pages of the page into nested decks.
-- `sync_every_minutes`: background auto-sync interval, `0` disables.
+- `notion_token`: internal integration token. Leave empty to use the
+  `NOTION_API_TOKEN` environment variable or a `.env` file.
+- `notion_pages`: list of page URLs or ids.
+- `autosync`: `false` by default; set to `true` to enable background syncing.
+- `sync_every_minutes`: interval in minutes when `autosync` is enabled.
 
-## Menus (Tools > Notion Sync)
+Use **Tools > Notion Sync > Settings** to edit these values. The add-on accepts
+both full Notion URLs and plain 32-character page ids.
 
-- **Sync Now**: fetch & import, keep notes already removed from Notion untouched.
-- **Sync & Remove Obsolete**: same, but also deletes notes whose Notion source
-  was deleted.
-- **Preview Structure**: dry run showing decks/tables/row counts, no writes.
+## Sync behavior
 
-Notes are identified by their Notion page id stored in the hidden `Source`
-field, so repeated syncs update existing cards instead of duplicating them.
+Notion is the single source of truth. Every sync updates existing cards and
+removes cards whose source rows are no longer present in Notion.

@@ -151,16 +151,14 @@ def fetch_pages(cfg: dict) -> SyncResult:
     media = MediaCollector()
     result = SyncResult()
     result.media_dir = tempfile.mkdtemp(prefix="notion-anki-sync-")
-    root_deck = deck_safe(cfg.get("target_deck", "Notion Sync"))
-
     for entry in cfg.get("notion_pages", []):
-        raw = str(entry.get("page_id", "")).strip()
+        raw = entry if isinstance(entry, str) else entry.get("page_id", "")
+        raw = str(raw).strip()
         if not raw:
             continue
         try:
             page_id = canonical_page_id(raw)
-            _fetch_page(page_id, client, tree, media, result, root_deck,
-                        recursive=bool(entry.get("recursive")))
+            _fetch_page(page_id, client, tree, media, result, None)
         except NotionError as e:
             result.warnings.append(str(e))
 
@@ -174,12 +172,13 @@ def _fetch_page(
     tree: BlockTree,
     media: MediaCollector,
     result: SyncResult,
-    parent_deck: str,
+    parent_deck: Optional[str],
     recursive: bool = False,
 ) -> None:
     page = client.get_page(page_id)
     title = page_title(page) or page_id[:8]
-    data = PageData(title=title, deck_name=f"{parent_deck}::{deck_safe(title)}")
+    deck_name = deck_safe(title) if parent_deck is None else f"{parent_deck}::{deck_safe(title)}"
+    data = PageData(title=title, deck_name=deck_name)
     result.pages.append(data)
 
     blocks = tree.children(page_id)
@@ -337,36 +336,7 @@ def _sniff_ext(blob: bytes) -> str:
 # Phase 2: write to Anki collection
 # --------------------------------------------------------------------- #
 
-PALETTE = {
-    "red": "#c0392b", "blue": "#2980b9", "green": "#27ae60", "yellow": "#b7950b",
-    "purple": "#8e44ad", "pink": "#e91e63", "orange": "#ca6f1e", "brown": "#873600",
-    "gray": "#7f8c8d", "grey": "#7f8c8d",
-}
-
-
-def _palette_css() -> str:
-    rules = []
-    for name, hexpair in PALETTE.items():
-        r, g, b = int(hexpair[1:3], 16), int(hexpair[3:5], 16), int(hexpair[5:7], 16)
-        rgba = f"rgba({r}, {g}, {b}, 0.18)"
-        rules.append(f".ns-bg-{name}_background {{ background: {rgba}; }}")
-    return "\n".join(rules)
-
-
-MODEL_CSS = """
-.card { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size: 17px; color: #333; text-align: left; }
-pre.ns-code { background: #282c34; color: #abb2bf; padding: 12px 14px; border-radius: 8px; font-size: 14px; overflow-x: auto; }
-code { font-family: "SF Mono", Consolas, Menlo, monospace; background: #f0f0f0; padding: 1px 5px; border-radius: 4px; font-size: 0.95em; }
-.ns-table { border-collapse: collapse; margin: 10px 0; }
-.ns-table th, .ns-table td { border: 1px solid #bdc3c7; padding: 6px 10px; min-width: 70px; text-align: left; }
-.ns-table th { background: #f4f6f7; font-weight: 600; }
-.ns-callout { padding: 10px 14px; border-radius: 8px; margin: 8px 0; }
-blockquote { border-left: 3px solid #ccc; margin: 8px 0; padding: 2px 12px; color: #444; }
-img, video { max-width: 100%; }
-ul, ol { padding-left: 24px; margin: 6px 0; }
-li { margin: 2px 0; }
-hr { border: none; border-top: 1px solid #ddd; margin: 12px 0; }
-""" + _palette_css()
+MODEL_CSS = ".card { text-align: left; }"
 
 
 def _get_or_create_model(col) -> dict:
@@ -394,7 +364,7 @@ def _get_or_create_model(col) -> dict:
     return refreshed if refreshed is not None else model
 
 
-def apply_sync(col, result: SyncResult, remove_obsolete: bool) -> Dict[str, int]:
+def apply_sync(col, result: SyncResult) -> Dict[str, int]:
     """Write decks/media/notes to the collection. MUST run on the main
     thread with mw.col open (col writes are not thread safe)."""
     from anki.notes import Note  # local import: keep module import cheap at startup
@@ -433,8 +403,7 @@ def apply_sync(col, result: SyncResult, remove_obsolete: bool) -> Dict[str, int]
                         existing["Front"] = row.front
                         col.update_note(existing)
                         stats["updated"] += 1
-    if remove_obsolete:
-        stats["removed"] = _remove_obsolete(col, seen_ids)
+    stats["removed"] = _remove_obsolete(col, seen_ids)
 
     result.cleanup()
     return stats
