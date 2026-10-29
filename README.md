@@ -9,8 +9,12 @@ An [Anki](https://apps.ankiweb.net/) add-on that creates Anki decks from
 - Add either a full Notion page URL or its 32-character page id.
 - Each page becomes a deck named after that page.
 - Each table becomes a subdeck, and each row becomes a card.
-- Notion is the single source of truth: one sync updates cards and removes
-  cards whose source rows no longer exist.
+- Notion is the source of truth for synced cards: one sync updates cards and
+  removes stale synced cards whose source rows no longer exist.
+- Decks are never deleted or reorganized. You can add your own subdecks under
+  a page deck and they will remain untouched.
+- Manually created cards are never deleted, including cards using the
+  add-on's note type without a Notion `Source` value.
 
 ## Content conversion
 

@@ -429,7 +429,7 @@ def _find_note_by_source(col, source_id: str):
 
 
 def _remove_obsolete(col, seen_ids: set) -> int:
-    """Remove notes of our model whose Source was not seen during this sync."""
+    """Remove stale synced cards without touching manually created cards."""
     to_remove = []
     try:
         note_ids = list(col.find_notes(f'note:"{MODEL_NAME}"'))
@@ -440,7 +440,8 @@ def _remove_obsolete(col, seen_ids: set) -> int:
             note = col.get_note(nid)
         except Exception:
             continue
-        if str(note["Source"]) not in seen_ids:
+        source_id = str(note["Source"]).strip()
+        if source_id and source_id not in seen_ids:
             to_remove.append(nid)
     if to_remove:
         col.remove_notes(to_remove)

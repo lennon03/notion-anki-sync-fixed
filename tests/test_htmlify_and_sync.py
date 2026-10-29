@@ -4,6 +4,7 @@ import os
 from notion_sync_addon.htmlify import MediaCollector, render_blocks
 from notion_sync_addon.sync import (
     _get_or_create_model,
+    _remove_obsolete,
     canonical_page_id,
     deck_safe,
     resolve_token,
@@ -165,3 +166,30 @@ def test_model_creation_leaves_backend_managed_id():
 
     model = _get_or_create_model(Collection())
     assert model["id"] == 0
+
+
+def test_obsolete_cleanup_keeps_manual_cards():
+    class Note:
+        def __init__(self, source):
+            self.fields = {"Source": source}
+
+        def __getitem__(self, key):
+            return self.fields[key]
+
+    class Collection:
+        def __init__(self):
+            self.notes = {1: Note("stale-source"), 2: Note("")}
+            self.removed = []
+
+        def find_notes(self, query):
+            return list(self.notes)
+
+        def get_note(self, note_id):
+            return self.notes[note_id]
+
+        def remove_notes(self, note_ids):
+            self.removed.extend(note_ids)
+
+    col = Collection()
+    assert _remove_obsolete(col, {"current-source"}) == 1
+    assert col.removed == [1]

@@ -23,5 +23,7 @@ both full Notion URLs and plain 32-character page ids.
 
 ## Sync behavior
 
-Notion is the single source of truth. Every sync updates existing cards and
-removes cards whose source rows are no longer present in Notion.
+Notion is the source of truth for synced cards. Every sync updates existing
+synced cards and removes stale synced cards whose source rows are no longer
+present in Notion. Decks are never deleted or reorganized, so manually added
+subdecks remain intact. Cards without a Notion `Source` value are also kept.
