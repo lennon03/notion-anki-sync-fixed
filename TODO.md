@@ -89,6 +89,36 @@ overwrites synced cards with what Notion says.
   - Keep it opt-in, per deck or table, so a mistake can't overwrite Notion
     notes.
 
+## Sync correctness
+
+Notion should always win. Known gaps, deferred from the review of PR #1:
+
+- [ ] **Renamed Notion page or table doesn't move existing cards.** Deck
+  names come from the page and table titles, but existing notes keep their
+  cards in the old deck; only new rows land in the renamed deck. Decide
+  whether a rename should move the cards (only those still in the old
+  add-on-made deck, so decks the user rearranged are left alone) and whether
+  to delete the empty old deck.
+- [ ] **Renaming the note type or its Source field in Anki makes duplicates.**
+  The add-on finds its notes by the "Notion Sync Card" note type and its
+  "Source" field. If either is renamed, no synced note is found, every row is
+  added again and the old notes are never removed. Remember the note type id
+  (and look the Source field up by position or a stored name) instead of
+  relying on names, or at least warn when the type is missing but notes with
+  Notion sources exist.
+- [ ] **Synced blocks and columns inside a row aren't rendered.** htmlify
+  skips `synced_block`, `column_list`/`column`, `link_to_page` and
+  `child_page` blocks, so that content never reaches the card. Rendering
+  synced block copies needs their original's children; rows with copies are
+  already always re-downloaded (their original can change without bumping
+  the row's last-edited time), so rendering them is safe to add. Bump
+  RENDER_VERSION when this changes.
+- [ ] **Show tables that keep failing somewhere persistent.** A table that
+  can't be read (e.g. a linked database view, or a table moved to the trash)
+  keeps its old cards and is reported in the warnings of every manual sync
+  (automatic syncs only show a tooltip when the warnings change). A line in
+  the settings dialog listing the failing tables would be easier to act on.
+
 ## Done
 
 - [x] **Decide on the "Notion" toolbar link.** Decided in 1.2.1: when
