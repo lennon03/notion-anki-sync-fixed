@@ -32,6 +32,12 @@ Cards can contain:
 
 ![MathJax, code, image, and table support](docs/supported-content.png)
 
+## New features
+
+Cloze and overlapping cloze, tags, a sync checkbox, a context column, card styles,
+code highlighting and more are explained in
+[docs/new_features.html](docs/new_features.html).
+
 ## Related project
 
 [Notion Philo Workflow](https://notion-philo-workflow.vercel.app/) complements
