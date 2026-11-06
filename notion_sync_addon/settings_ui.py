@@ -566,7 +566,9 @@ class SettingsDialog(QDialog):
         self._lookup = lookup_name
         self._on_save = on_save
         self._on_sync = on_sync
-        self._signals = _NameSignals(self)
+        # not parented to the dialog: a lookup thread may still emit after
+        # the dialog is deleted (Qt then drops the connection to it)
+        self._signals = _NameSignals()
         self._signals.resolved.connect(self._apply_name)
         self._page_rows: dict = {}
 
@@ -790,25 +792,31 @@ class SettingsDialog(QDialog):
         self._update_status()
         if resolve:
             token = self.token.text()
+            # the thread only holds these two, never the dialog itself
+            lookup, signals = self._lookup, self._signals
 
             def work() -> None:
                 try:
-                    result = self._lookup(page_id, token) or "Untitled page"
+                    result = lookup(page_id, token) or "Untitled page"
                 except Exception:
                     result = "Name unavailable"
                 try:
-                    self._signals.resolved.emit(page_id, result)
-                except RuntimeError:  # dialog already closed
+                    signals.resolved.emit(page_id, result)
+                except RuntimeError:
                     pass
 
             threading.Thread(target=work, daemon=True).start()
 
     def _apply_name(self, page_id: str, name: str) -> None:
         entry = self._page_rows.get(page_id)
-        if entry:
+        if not entry:
+            return
+        try:
             entry[1].setText(name)
             entry[1].setProperty("pending", False)
             _repolish(entry[1])
+        except RuntimeError:  # row or dialog already deleted
+            pass
 
     def _remove_page(self, page_id: str) -> None:
         row, _ = self._page_rows.pop(page_id)
