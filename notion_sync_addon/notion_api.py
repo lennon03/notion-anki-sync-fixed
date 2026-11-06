@@ -190,13 +190,13 @@ class NotionClient:
         return self._request("GET", f"/data_sources/{data_source_id}")
 
     def query_data_source(
-        self, data_source_id: str, title_only: bool = True
+        self, data_source_id: str, title_only: bool = False
     ) -> List[dict]:
         """All row pages of a data source, following pagination.
 
-        ``title_only`` asks Notion to return just the title property: the
-        sync only needs the title plus each row's built-in id and
-        last_edited_time, so the other columns are dead weight.
+        Every property comes back by default: the sync reads its checkbox,
+        tags and other columns from the listing (same number of requests).
+        ``title_only`` asks Notion for just the title property instead.
         """
         out: List[dict] = []
         path = f"/data_sources/{data_source_id}/query"

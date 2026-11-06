@@ -35,7 +35,17 @@ import unicodedata
 import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+)
 
 from .htmlify import MediaCollector, render_blocks
 from .notion_api import (
@@ -49,6 +59,17 @@ from .notion_api import (
 
 MODEL_NAME = "Notion Sync Card"
 UNDO_NAME = "Notion Sync"
+# The add-on's own note types are found by id, kept in the collection config
+# (synced via AnkiWeb): role ("basic", ...) -> note type id. The name is only
+# the fallback, so renaming a note type in Anki changes nothing.
+NOTE_TYPES_KEY = "notionSync.noteTypes"
+# Fixed field positions of the basic type: names can be renamed in Anki.
+FRONT, BACK, SOURCE = 0, 1, 2
+# The add-on owns the tags under this prefix (Anki tags are case-insensitive)
+# and never touches any other tag.
+TAG_PREFIX = "Notion::"
+# Marks the notes whose cards were suspended because the row was unchecked.
+UNCHECKED_TAG = "notion-sync::unchecked"
 
 # The cache lives in a JSON file per profile in the add-on's user_files
 # folder (kept across add-on upgrades, never sent to AnkiWeb):
@@ -159,6 +180,9 @@ class RowCard:
     back_html: str  # may contain @@NSMEDIA:*@@ placeholders
     url: str
     unchanged: bool = False  # content not fetched: note is already current
+    tags: List[str] = field(default_factory=list)  # Notion::... tags
+    unchecked: bool = False  # sync checkbox off: no card, content not read
+    columns: Optional["RowColumns"] = None  # the row's parsed properties
 
 
 @dataclass
@@ -363,6 +387,200 @@ def deck_safe(name: str) -> str:
 
 
 # --------------------------------------------------------------------- #
+# Row properties (columns)
+# --------------------------------------------------------------------- #
+
+COLUMN_DEFAULTS = {
+    "sync_column": "Anki",
+    "tags_column": "Tags",
+    "card_type_column": "Card type",
+    "context_column": "Context",
+}
+
+
+@dataclass
+class RowColumns:
+    """What a row's properties say, read by ``row_columns``."""
+
+    sync: Optional[bool] = None  # None = the table has no sync column
+    tags: List[str] = field(default_factory=list)  # cleaned, not prefixed
+    card_type: str = ""  # lowercased select name
+    context: List[str] = field(default_factory=list)  # page ids or URLs
+    props: Dict[str, str] = field(default_factory=dict)  # name -> text
+
+
+def _plain(rich: Any) -> str:
+    if not isinstance(rich, list):
+        return ""
+    return "".join(
+        str(x.get("plain_text") or "") for x in rich if isinstance(x, dict)
+    )
+
+
+def _date_text(date: Any) -> str:
+    if not isinstance(date, dict) or not date.get("start"):
+        return ""
+    text = str(date["start"])
+    if date.get("end"):
+        text += f" \u2192 {date['end']}"
+    return text
+
+
+def _names(items: Any) -> List[str]:
+    if not isinstance(items, list):
+        return []
+    return [
+        str(i.get("name") or "")
+        for i in items
+        if isinstance(i, dict) and i.get("name")
+    ]
+
+
+def _value(prop: dict) -> Any:
+    kind = prop.get("type")
+    return prop.get(kind) if isinstance(kind, str) else None
+
+
+def _prop_text(prop: dict) -> str:
+    """Plain text of one property value (see ``row_columns``)."""
+    kind = prop.get("type")
+    value = _value(prop)
+    if kind in ("title", "rich_text"):
+        return _plain(value)
+    if kind in ("select", "status"):
+        return str((value or {}).get("name") or "")
+    if kind in ("multi_select", "people"):
+        return ", ".join(_names(value))
+    if kind == "number":
+        return "" if value is None else str(value)
+    if kind == "checkbox":
+        return "Yes" if value else ""
+    if kind == "date":
+        return _date_text(value)
+    if kind in ("url", "email", "phone_number"):
+        return str(value or "")
+    if kind == "formula" and isinstance(value, dict):
+        inner = value.get(value.get("type") or "")
+        if value.get("type") == "date":
+            return _date_text(inner)
+        if value.get("type") == "boolean":
+            return "Yes" if inner else ""
+        return "" if inner is None else str(inner)
+    return ""
+
+
+def _find_prop(props: dict, name: str) -> Optional[dict]:
+    """Find the property called ``name`` (ignoring case and space)."""
+    wanted = name.strip().lower()
+    if not wanted:
+        return None
+    for key, prop in props.items():
+        if str(key).strip().lower() == wanted and isinstance(prop, dict):
+            return prop
+    return None
+
+
+def clean_tag(raw: str) -> str:
+    """Make a Notion value a valid Anki tag ("" if nothing is left)."""
+    text = re.sub(r"\s+", "_", raw.strip())
+    text = re.sub(r'["\x00-\x1f\x7f]', "", text)
+    parts = [p.strip(":") for p in text.split("::")]
+    return "::".join(p for p in parts if p)
+
+
+def clean_tags(values: Iterable[str]) -> List[str]:
+    """Clean tags, dropping empties and case-insensitive duplicates."""
+    out: Dict[str, str] = {}
+    for value in values:
+        tag = clean_tag(value)
+        if tag:
+            out.setdefault(tag.lower(), tag)
+    return list(out.values())
+
+
+def _tag_values(prop: dict) -> List[str]:
+    kind = prop.get("type")
+    value = _value(prop)
+    if kind == "multi_select":
+        return _names(value)
+    if kind in ("select", "status"):
+        return _names([value]) if isinstance(value, dict) else []
+    if kind == "rich_text":
+        return _plain(value).split(",")
+    return []
+
+
+def _context_values(prop: dict) -> List[str]:
+    kind = prop.get("type")
+    value = _value(prop)
+    out: List[str] = []
+    if kind == "relation" and isinstance(value, list):
+        out = [
+            _bare(str(r.get("id") or "")) for r in value if isinstance(r, dict)
+        ]
+    elif kind == "url" and value:
+        out = [str(value)]
+    elif kind == "rich_text" and isinstance(value, list):
+        for rt in value:
+            if not isinstance(rt, dict):
+                continue
+            mention = rt.get("mention") or {}
+            if mention.get("type") == "page":
+                out.append(
+                    _bare(str((mention.get("page") or {}).get("id") or ""))
+                )
+                continue
+            link = rt.get("href") or ((rt.get("text") or {}).get("link"))
+            if isinstance(link, dict):
+                link = link.get("url")
+            if link:
+                out.append(str(link))
+    return list(dict.fromkeys(v for v in out if v))
+
+
+def row_columns(row: dict, cfg: dict) -> RowColumns:
+    """Read the special columns of a row listed by a data source query.
+
+    Column names come from the config (``sync_column`` ...), matched
+    ignoring case and surrounding space; an empty name disables the column.
+    """
+
+    def name(key: str) -> str:
+        value = cfg.get(key, COLUMN_DEFAULTS[key])
+        return "" if value is None else str(value)
+
+    props = row.get("properties")
+    props = props if isinstance(props, dict) else {}
+    out = RowColumns()
+    out.props = {
+        str(key): _prop_text(prop)
+        for key, prop in props.items()
+        if isinstance(prop, dict)
+    }
+    sync = _find_prop(props, name("sync_column"))
+    if sync is not None:
+        if sync.get("type") == "checkbox":
+            out.sync = bool(sync.get("checkbox"))
+        elif sync.get("type") == "formula":
+            formula = sync.get("formula") or {}
+            if formula.get("type") == "boolean":
+                out.sync = bool(formula.get("boolean"))
+    tags = _find_prop(props, name("tags_column"))
+    if tags is not None:
+        out.tags = clean_tags(_tag_values(tags))
+    card_type = _find_prop(props, name("card_type_column"))
+    if card_type is not None and card_type.get("type") in (
+        "select",
+        "status",
+    ):
+        out.card_type = _prop_text(card_type).strip().lower()
+    context = _find_prop(props, name("context_column"))
+    if context is not None:
+        out.context = _context_values(context)
+    return out
+
+
+# --------------------------------------------------------------------- #
 # Cache freshness
 # --------------------------------------------------------------------- #
 
@@ -542,53 +760,116 @@ def save_cache(path: str, cache: Cache) -> bool:
 # --------------------------------------------------------------------- #
 
 
-def fingerprint(front: str, back: str) -> str:
-    """Return a short hash of a note's Front and Back."""
-    return hashlib.sha1(f"{front}\x1f{back}".encode("utf-8")).hexdigest()[:16]
+def owned_tags(tags: Iterable[str]) -> List[str]:
+    """Pick the tags the add-on owns (under ``Notion::``)."""
+    return [t for t in tags if t.lower().startswith(TAG_PREFIX.lower())]
 
 
-def _field_indexes(model: dict) -> Dict[str, int]:
-    return {
-        fld.get("name"): index
-        for index, fld in enumerate(model.get("flds", []))
-    }
+def owned_key(tags: Iterable[str]) -> str:
+    """Owned tags as a sorted, lowercase string for ``fingerprint``."""
+    return " ".join(sorted(t.lower() for t in owned_tags(tags)))
 
 
-def synced_notes(col) -> Dict[str, List[Tuple[int, str]]]:
-    """Source id -> [(note id, fingerprint of its Front/Back)], oldest first.
+def fingerprint(*content: str, tags: str = "") -> str:
+    """Return a short hash of a note's content fields and owned tags.
 
-    One SQL query. Only notes whose Source is a Notion row id count: notes
-    without one, or with anything else in it (added by hand), are left out
-    and never touched.
+    ``tags`` is ``owned_key`` of the note's tags; without owned tags the hash
+    is the one older versions computed, so existing caches stay valid.
     """
-    model = col.models.by_name(MODEL_NAME)
-    if model is None:
+    data = "\x1f".join(content)
+    if tags:
+        data += "\x1e" + tags
+    return hashlib.sha1(data.encode("utf-8")).hexdigest()[:16]
+
+
+# role -> name used when the stored id is missing (see NOTE_TYPES_KEY)
+MODEL_NAMES = {"basic": MODEL_NAME}
+
+
+def _registry(col) -> Dict[str, Any]:
+    """Read the stored note type ids ({} if none or unreadable)."""
+    try:
+        value = col.get_config(NOTE_TYPES_KEY, None)
+    except Exception:  # noqa: BLE001 - no config, no registry
         return {}
-    index = _field_indexes(model)
-    src, front, back = (
-        index.get("Source"),
-        index.get("Front"),
-        index.get("Back"),
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def find_model(col, role: str = "basic") -> Optional[dict]:
+    """Find the add-on's note type for ``role``: by id, then by name."""
+    mid = _registry(col).get(role)
+    if isinstance(mid, int) and not isinstance(mid, bool):
+        model = col.models.get(mid)
+        if model is not None:
+            return model
+    name = MODEL_NAMES.get(role)
+    return col.models.by_name(name) if name else None
+
+
+def own_model_ids(col) -> Dict[str, int]:
+    """Role -> note type id of the add-on's own types that exist."""
+    out: Dict[str, int] = {}
+    for role in sorted(set(_registry(col)) | set(MODEL_NAMES)):
+        model = find_model(col, role)
+        if model is not None and model.get("id"):
+            out[role] = int(model["id"])
+    return out
+
+
+def _remember_model(
+    col, role: str, model: dict, before_change: Callable[[], None]
+) -> None:
+    """Store the note type id, only when it differs (unknown roles stay)."""
+    registry = _registry(col)
+    if registry.get(role) == model["id"]:
+        return
+    before_change()
+    registry[role] = model["id"]
+    col.set_config(NOTE_TYPES_KEY, registry, undoable=True)
+
+
+class SyncedNote(NamedTuple):
+    """One note made by the add-on."""
+
+    nid: int
+    fp: str  # fingerprint of its content fields and owned tags
+    mid: int  # note type id
+    tags: str  # Anki's tag string of the note
+
+
+def synced_notes(col) -> Dict[str, List[SyncedNote]]:
+    """Source id -> synced notes, oldest first.
+
+    One SQL query over the add-on's own note types. Only notes whose Source
+    is a Notion row id count: notes without one, or with anything else in it
+    (added by hand), are left out and never touched. Fields are read by
+    position, so renaming them in Anki changes nothing.
+    """
+    mids = sorted(set(own_model_ids(col).values()))
+    if not mids:
+        return {}
+    marks = ",".join("?" * len(mids))
+    sql = (
+        "select id, mid, flds, tags from notes "
+        f"where mid in ({marks}) order by id"
     )
-    if src is None or front is None or back is None:
-        return {}
-    out: Dict[str, List[Tuple[int, str]]] = {}
-    sql = "select id, flds from notes where mid = ? order by id"
-    for nid, flds in col.db.all(sql, model["id"]):
+    out: Dict[str, List[SyncedNote]] = {}
+    for nid, mid, flds, tags in col.db.all(sql, *mids):
         parts = flds.split("\x1f")
-        if max(src, front, back) >= len(parts):
+        if len(parts) <= SOURCE:
             continue
-        source = parts[src].strip()
+        source = parts[SOURCE].strip()
         if not SOURCE_ID.fullmatch(source):
             continue
-        out.setdefault(source, []).append(
-            (nid, fingerprint(parts[front], parts[back]))
+        fp = fingerprint(
+            parts[FRONT], parts[BACK], tags=owned_key(tags.split())
         )
+        out.setdefault(source, []).append(SyncedNote(nid, fp, mid, tags))
     return out
 
 
 def trusted_rows(
-    cache: Cache, notes: Dict[str, List[Tuple[int, str]]]
+    cache: Cache, notes: Dict[str, List[SyncedNote]]
 ) -> Dict[str, RowState]:
     """Return the cached rows whose note holds what the add-on wrote.
 
@@ -601,7 +882,7 @@ def trusted_rows(
         if (
             entries
             and state.fingerprint
-            and entries[0][1] == state.fingerprint
+            and entries[0].fp == state.fingerprint
         ):
             out[key] = state
     return out
@@ -980,6 +1261,24 @@ def _fetch_table(
             continue
         row_id = row["id"].replace("-", "")
         edited = str(row.get("last_edited_time") or "")
+        columns = row_columns(row, result.config)
+        tags = [TAG_PREFIX + t for t in columns.tags]
+        if columns.sync is False:
+            # unchecked: no card and no download. Only where the row came
+            # from is kept; its content is read when it is checked again
+            result.fetched[row_id] = RowState("", 0.0, "", page_id, db_id)
+            table.rows.append(
+                RowCard(
+                    source_id=row_id,
+                    front=front,
+                    back_html="",
+                    url=row.get("url", ""),
+                    tags=tags,
+                    unchecked=True,
+                    columns=columns,
+                )
+            )
+            continue
         cached = result.known.get(row_id)
         if is_unchanged(cached, edited, row_id, now):
             assert cached is not None
@@ -993,6 +1292,8 @@ def _fetch_table(
                     back_html="",
                     url=row.get("url", ""),
                     unchanged=True,
+                    tags=tags,
+                    columns=columns,
                 )
             )
             continue
@@ -1026,6 +1327,8 @@ def _fetch_table(
                 front=front,
                 back_html=back,
                 url=row.get("url", ""),
+                tags=tags,
+                columns=columns,
             )
         )
     return table
@@ -1225,7 +1528,7 @@ def _get_or_create_model(
     col, before_change: Callable[[], None] = _no_change
 ) -> dict:
     """Find or build the 'Notion Sync Card' note type."""
-    model = col.models.by_name(MODEL_NAME)
+    model = find_model(col)
     if model is not None:
         if model.get("css") != MODEL_CSS:
             before_change()
@@ -1439,6 +1742,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     }
     _drop_legacy_state(col, undo.begin)
     model = _get_or_create_model(col, undo.begin)
+    _remember_model(col, "basic", model, undo.begin)
     imported_names = _import_media(col, result)
 
     notes = synced_notes(col)
@@ -1454,17 +1758,47 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                 handled.add(row.source_id)
                 seen.add(row.source_id)
                 entries = notes.get(row.source_id)
-                nid, current = entries[0] if entries else (None, "")
+                entry = entries[0] if entries else None
+                nid = entry.nid if entry else None
+                current = entry.fp if entry else ""
                 state = result.fetched.get(row.source_id)
+                if row.unchecked:
+                    if entry is not None:
+                        stats[
+                            (
+                                "updated"
+                                if _hold(col, entry, undo)
+                                else "unchanged"
+                            )
+                        ] += 1
+                    continue
+                restored = False
+                if entry is not None and _marked(entry.tags):
+                    _release(col, entry.nid, undo)
+                    stats["updated"] += 1
+                    restored = True
+                bump = 0 if restored else 1  # one change per note
                 if row.unchanged:
                     # checked again here: the note may have been edited,
                     # undone or deleted while Notion was being read
                     if (
-                        nid is not None
+                        entry is not None
                         and state is not None
                         and current == state.fingerprint
                     ):
-                        stats["unchanged"] += 1
+                        if owned_key(row.tags) != owned_key(
+                            entry.tags.split()
+                        ):
+                            # tags changed in Notion; the listing has them,
+                            # so no download is needed
+                            undo.begin()
+                            note = col.get_note(entry.nid)
+                            note.tags = _with_tags(note.tags, row.tags)
+                            col.update_note(note)
+                            stats["updated"] += bump
+                            state.fingerprint = _stored_fingerprint(note)
+                        else:
+                            stats["unchanged"] += bump
                     else:
                         _forget(result, row.source_id)
                     continue
@@ -1473,7 +1807,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     "NFC",
                     MediaCollector.resolve(row.back_html, imported_names),
                 )
-                written = fingerprint(front, back)
+                written = fingerprint(front, back, tags=owned_key(row.tags))
                 if nid is None:
                     undo.begin()
                     if deck_id is None:
@@ -1481,9 +1815,10 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                             col, f"{page.deck_name}::{table.title}"
                         )
                     note = Note(col, model)
-                    note["Front"] = front
-                    note["Back"] = back
-                    note["Source"] = row.source_id
+                    note.fields[FRONT] = front
+                    note.fields[BACK] = back
+                    note.fields[SOURCE] = row.source_id
+                    note.tags = list(row.tags)
                     col.add_note(note, deck_id)
                     nid = note.id
                     added.add(row.source_id)
@@ -1491,10 +1826,11 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                 elif current != written:
                     undo.begin()
                     note = col.get_note(nid)
-                    note["Front"] = front
-                    note["Back"] = back
+                    note.fields[FRONT] = front
+                    note.fields[BACK] = back
+                    note.tags = _with_tags(note.tags, row.tags)
                     col.update_note(note)
-                    stats["updated"] += 1
+                    stats["updated"] += bump
                 else:
                     if state is not None:
                         state.fingerprint = current
@@ -1502,14 +1838,55 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                 if state is not None:
                     # fingerprint of what Anki actually stored (normally
                     # what was written; read back in case it differs)
-                    stored = col.get_note(nid)
-                    state.fingerprint = fingerprint(
-                        stored["Front"], stored["Back"]
-                    )
+                    state.fingerprint = _stored_fingerprint(col.get_note(nid))
     removed, gone = _remove_obsolete(col, notes, seen, result, undo.begin)
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
     return stats
+
+
+def _stored_fingerprint(note) -> str:
+    return fingerprint(
+        note.fields[FRONT], note.fields[BACK], tags=owned_key(note.tags)
+    )
+
+
+def _with_tags(existing: Iterable[str], owned: Iterable[str]) -> List[str]:
+    """Replace the owned tags among a note's tags; others stay."""
+    drop = set(owned_tags(existing))
+    return [t for t in existing if t not in drop] + list(owned)
+
+
+def _marked(tags: str) -> bool:
+    return UNCHECKED_TAG in tags.lower().split()
+
+
+def _hold(col, entry: SyncedNote, undo: _UndoStep) -> bool:
+    """Suspend an unchecked row's cards and mark the note, once.
+
+    A note already marked is left alone, so cards the user unsuspended by
+    hand stay unsuspended. True if something changed.
+    """
+    if _marked(entry.tags):
+        return False
+    undo.begin()
+    col.sched.suspend_cards(col.card_ids_of_note(entry.nid))
+    note = col.get_note(entry.nid)
+    note.tags = list(note.tags) + [UNCHECKED_TAG]
+    col.update_note(note)
+    return True
+
+
+def _release(col, nid: int, undo: _UndoStep) -> None:
+    """Undo ``_hold`` for a row that is checked again (or lost the column).
+
+    Only notes carrying the marker get here: cards suspended by hand never.
+    """
+    undo.begin()
+    col.sched.unsuspend_cards(col.card_ids_of_note(nid))
+    note = col.get_note(nid)
+    note.tags = [t for t in note.tags if t.lower() != UNCHECKED_TAG]
+    col.update_note(note)
 
 
 def get_or_create_deck(col, name: str) -> int:
@@ -1544,7 +1921,7 @@ def _removal_blocked(source_id: str, result: SyncResult) -> bool:
 
 def _remove_obsolete(
     col,
-    notes: Dict[str, List[Tuple[int, str]]],
+    notes: Dict[str, List[SyncedNote]],
     seen: Set[str],
     result: SyncResult,
     before_change: Callable[[], None] = _no_change,
@@ -1557,12 +1934,12 @@ def _remove_obsolete(
     gone: Set[str] = set()
     for source_id, entries in notes.items():
         if source_id not in seen and not _removal_blocked(source_id, result):
-            to_remove += [nid for nid, _ in entries]
+            to_remove += [e.nid for e in entries]
             gone.add(source_id)
         else:
             # the same row added twice (e.g. on two devices before they
             # synced): keep the oldest note
-            to_remove += [nid for nid, _ in entries[1:]]
+            to_remove += [e.nid for e in entries[1:]]
     if to_remove:
         before_change()
         col.remove_notes(to_remove)

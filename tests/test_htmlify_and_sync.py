@@ -856,6 +856,7 @@ class FakeNotion:
         self.calls = []  # every request: (kind, id)
         self.ds = {}  # db id -> current data source id (default "ds-<db>")
         self.trashed = {}  # row id -> db id: rows moved to Notion's trash
+        self.props = {}  # row id -> extra Notion property objects
 
     def __call__(self, token):  # stands in for the NotionClient class
         return self
@@ -941,7 +942,8 @@ class FakeNotion:
                         "title": (
                             r[3] if len(r) > 3 else [{"plain_text": r[0]}]
                         ),
-                    }
+                    },
+                    **self.props.get(rid, {}),
                 },
             }
             for rid, r in self.tables[db]["rows"].items()
