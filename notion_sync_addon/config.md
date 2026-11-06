@@ -32,13 +32,27 @@ both full Notion URLs and plain 32-character page ids.
 
 Notion is the source of truth for synced cards. Every sync updates existing
 synced cards and removes stale synced cards whose source rows are no longer
-present in Notion. Decks are never deleted or reorganized, so manually added
-subdecks remain intact. Cards without a Notion `Source` value are also kept.
-If part of Notion can't be read (network error, rate limit), nothing is
-removed in that sync.
+present in Notion. A synced card edited in Anki is overwritten with Notion's
+version on the next sync, and a deleted one is recreated. If the same row was
+added twice (e.g. on two devices before they synced), the oldest card is kept.
+Decks are never deleted or reorganized, so manually added subdecks remain
+intact. Cards without a Notion `Source` value are also kept.
+If part of Notion can't be read (network error, rate limit, a table that is
+gone), the cards that came from that page or table are kept; the rest of the
+sync still happens.
 
 Only rows edited in Notion since the last sync are downloaded again; the
 others are recognised by Notion's built-in last-edited time, so no extra
-column is needed. Pages that weren't edited reuse their list of tables. **Full Resync**
-re-downloads every row. A sync is a single undo step: **Edit > Undo Notion
-Sync** reverts it.
+column is needed. Pages that weren't edited reuse their list of tables. As a
+safety net, rows edited in the last few minutes, rows containing content that
+can change without Notion noticing (synced block copies, page mentions) and,
+spread over time, every row older than one to two weeks are downloaded again.
+**Full Resync** re-downloads every row.
+
+A sync that changes cards is a single undo step: **Edit > Undo Notion Sync**
+reverts it, and the next sync brings the cards back in line with Notion. A
+sync that changes nothing adds no undo step.
+
+The list of downloaded rows is kept in the add-on's `user_files` folder (one
+file per profile), not in the collection, so it is never uploaded to AnkiWeb.
+Deleting it is safe: the next sync just downloads every row again.

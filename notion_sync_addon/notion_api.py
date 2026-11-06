@@ -13,6 +13,7 @@ import json
 import threading
 import time
 import urllib.request
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 
 API_HOST = "api.notion.com"
@@ -22,6 +23,8 @@ USER_AGENT = "notion-anki-sync/2.0"
 
 MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 2
+MAX_RETRY_DELAY_SECONDS = 30.0
+REQUEST_TIMEOUT_SECONDS = 60
 
 
 class NotionError(Exception):
@@ -47,7 +50,7 @@ class NotionClient:
     def _connection(self) -> http.client.HTTPSConnection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = http.client.HTTPSConnection(API_HOST, timeout=60)
+            conn = http.client.HTTPSConnection(API_HOST, timeout=REQUEST_TIMEOUT_SECONDS)
             self._local.conn = conn
         return conn
 
@@ -82,12 +85,15 @@ class NotionClient:
                 time.sleep(RETRY_BACKOFF_SECONDS * (attempt - 1))
                 continue
             if status < 400:
-                return json.loads(payload.decode("utf-8"))
+                try:
+                    return json.loads(payload.decode("utf-8"))
+                except ValueError as e:  # truncated or non-JSON body
+                    raise NotionError(f"Invalid response from Notion for {path}: {e}") from e
             if status == 429 or status >= 500:
                 if attempt > MAX_RETRIES:
                     raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}")
-                delay = float(retry_after) if retry_after else RETRY_BACKOFF_SECONDS * attempt
-                time.sleep(min(delay, 30.0))
+                delay = retry_delay(retry_after, RETRY_BACKOFF_SECONDS * attempt)
+                time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
                 continue
             raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}")
 
@@ -143,8 +149,27 @@ class NotionClient:
     def download_file(self, url: str) -> bytes:
         """Download a Notion-hosted (or external) file. No auth needed."""
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
             return resp.read()
+
+
+def retry_delay(retry_after: Optional[str], default: float) -> float:
+    """Seconds to wait from a Retry-After header: delta-seconds or an
+    HTTP date; anything unreadable falls back to ``default``."""
+    value = (retry_after or "").strip()
+    if not value:
+        return default
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return default
+    if when is None:
+        return default
+    return max(0.0, when.timestamp() - time.time())
 
 
 def page_title(obj: dict) -> str:
