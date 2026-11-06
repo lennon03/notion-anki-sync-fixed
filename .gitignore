@@ -130,3 +130,6 @@ dmypy.json
 
 # JUnit
 junit.xml
+
+# Built add-on packages
+*.ankiaddon

@@ -3,29 +3,72 @@
 
 Only read endpoints are used: pages, block children, databases,
 data sources and data source queries. Handles pagination and 429/5xx
-retries.
+retries, and keeps one HTTPS connection alive per thread (saves the TLS
+handshake on every request, ~25% per call).
 """
+
 from __future__ import annotations
 
+import http.client
 import json
+import threading
 import time
-import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from email.utils import parsedate_to_datetime
+from typing import Any, Dict, List, Optional, Protocol
 
-BASE_URL = "https://api.notion.com/v1"
+API_HOST = "api.notion.com"
+BASE_URL = f"https://{API_HOST}/v1"
 NOTION_VERSION = "2025-09-03"
 USER_AGENT = "notion-anki-sync/2.0"
 
 MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 2
+MAX_RETRY_DELAY_SECONDS = 30.0
+REQUEST_TIMEOUT_SECONDS = 60
 
 
 class NotionError(Exception):
-    """Raised when Notion returns a permanent error."""
+    """Raised when a Notion request fails.
+
+    ``status`` is the HTTP status (None for network errors). ``transient``
+    is True for failures that say nothing about the object itself (network
+    errors, rate limits and server errors that outlasted the retries): only
+    a non-transient error means Notion rejected the request as such.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status: Optional[int] = None,
+        transient: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.transient = transient
+
+    def reason(self) -> str:
+        """Explain the failure in a few user-facing words."""
+        if self.status in (401,):
+            return "the token was rejected (401)"
+        if self.status in (403, 404):
+            return (
+                f"not found or not shared with the integration ({self.status})"
+            )
+        if self.status == 429:
+            return "rate limited by Notion (429)"
+        if self.status is not None and self.status >= 500:
+            return f"Notion server error ({self.status})"
+        if self.status is not None:
+            return f"Notion rejected the request ({self.status})"
+        if self.transient:
+            return "network error"
+        return str(self)
 
 
 class NotionClient:
+    """Read-only Notion API client authenticated with ``token``."""
+
     def __init__(self, token: str):
         if not token:
             raise NotionError("No Notion API token configured")
@@ -35,35 +78,81 @@ class NotionClient:
             "Content-Type": "application/json",
             "User-Agent": USER_AGENT,
         }
+        self._local = threading.local()
 
     # ------------------------------------------------------------------ #
     # Low level
     # ------------------------------------------------------------------ #
 
-    def _request(self, method: str, path: str, data: Optional[dict] = None) -> dict:
-        url = path if path.startswith("http") else BASE_URL + path
+    def _connection(self) -> http.client.HTTPSConnection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = http.client.HTTPSConnection(
+                API_HOST, timeout=REQUEST_TIMEOUT_SECONDS
+            )
+            self._local.conn = conn
+        return conn
+
+    def _drop_connection(self) -> None:
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            conn.close()
+            self._local.conn = None
+
+    def _request(
+        self, method: str, path: str, data: Optional[dict] = None
+    ) -> dict:
+        if path.startswith(BASE_URL):
+            path = path[len(BASE_URL) :]
+        url = "/v1" + path
         body = json.dumps(data).encode("utf-8") if data is not None else None
         attempt = 0
         while True:
             attempt += 1
-            req = urllib.request.Request(url, data=body, headers=self._headers, method=method)
             try:
-                with urllib.request.urlopen(req) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
-            except urllib.error.HTTPError as e:
-                status = e.code
-                if status == 429 or status >= 500:
-                    if attempt > MAX_RETRIES:
-                        raise NotionError(f"Notion API error {status} for {path}: {e.read()[:300]}") from e
-                    retry_after = e.headers.get("Retry-After") if e.headers else None
-                    delay = float(retry_after) if retry_after else RETRY_BACKOFF_SECONDS * attempt
-                    time.sleep(min(delay, 30.0))
-                    continue
-                raise NotionError(f"Notion API error {status} for {path}: {e.read()[:300]}") from e
-            except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
+                conn = self._connection()
+                conn.request(method, url, body=body, headers=self._headers)
+                resp = conn.getresponse()
+                payload = resp.read()
+                status = resp.status
+                retry_after = resp.getheader("Retry-After")
+                if (resp.getheader("Connection") or "").lower() == "close":
+                    self._drop_connection()
+            except (http.client.HTTPException, OSError) as e:
+                # stale keep-alive socket or network blip: reconnect and retry
+                self._drop_connection()
                 if attempt > MAX_RETRIES:
-                    raise NotionError(f"Network error calling Notion for {path}: {e}") from e
-                time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+                    raise NotionError(
+                        f"Network error calling Notion for {path}: {e}",
+                        transient=True,
+                    ) from e
+                time.sleep(RETRY_BACKOFF_SECONDS * (attempt - 1))
+                continue
+            if status < 400:
+                try:
+                    return json.loads(payload.decode("utf-8"))
+                except ValueError as e:  # truncated or non-JSON body
+                    raise NotionError(
+                        f"Invalid response from Notion for {path}: {e}",
+                        status,
+                        transient=True,
+                    ) from e
+            if status == 429 or status >= 500:
+                if attempt > MAX_RETRIES:
+                    raise NotionError(
+                        _error_text(status, path, payload),
+                        status,
+                        transient=True,
+                    )
+                delay = retry_delay(
+                    retry_after, RETRY_BACKOFF_SECONDS * attempt
+                )
+                time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
+                continue
+            raise NotionError(
+                _error_text(status, path, payload),
+                status,
+            )
 
     def _iterate(self, results: List[dict], has_more: bool) -> List[dict]:
         return list(results)
@@ -73,6 +162,7 @@ class NotionClient:
     # ------------------------------------------------------------------ #
 
     def get_page(self, page_id: str) -> dict:
+        """GET /pages/<id>: a page, or a table row (rows are pages)."""
         return self._request("GET", f"/pages/{page_id}")
 
     def get_block_children(self, block_id: str) -> List[dict]:
@@ -86,39 +176,90 @@ class NotionClient:
                 return out
             cursor = data.get("next_cursor")
             assert isinstance(cursor, str)
-            url = f"{BASE_URL}/blocks/{block_id}/children?page_size=100&start_cursor={cursor}"
+            url = (
+                f"{BASE_URL}/blocks/{block_id}/children"
+                f"?page_size=100&start_cursor={cursor}"
+            )
 
     def get_database(self, database_id: str) -> dict:
+        """GET /databases/<id>: title and data sources of a database."""
         return self._request("GET", f"/databases/{database_id}")
 
     def get_data_source(self, data_source_id: str) -> dict:
+        """GET /data_sources/<id>."""
         return self._request("GET", f"/data_sources/{data_source_id}")
 
-    def query_data_source(self, data_source_id: str) -> List[dict]:
-        """All row pages of a data source, following pagination."""
+    def query_data_source(
+        self, data_source_id: str, title_only: bool = True
+    ) -> List[dict]:
+        """All row pages of a data source, following pagination.
+
+        ``title_only`` asks Notion to return just the title property: the
+        sync only needs the title plus each row's built-in id and
+        last_edited_time, so the other columns are dead weight.
+        """
         out: List[dict] = []
+        path = f"/data_sources/{data_source_id}/query"
+        if title_only:
+            path += "?filter_properties=title"
         data: dict = {"results": [], "has_more": True, "next_cursor": None}
         while data.get("has_more"):
             payload: dict = {"page_size": 100}
             if data.get("next_cursor"):
                 payload["start_cursor"] = data["next_cursor"]
-            data = self._request("POST", f"/data_sources/{data_source_id}/query", payload)
+            data = self._request("POST", path, payload)
             out += data.get("results", [])
         return out
 
     def download_file(self, url: str) -> bytes:
         """Download a Notion-hosted (or external) file. No auth needed."""
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(
+            req, timeout=REQUEST_TIMEOUT_SECONDS
+        ) as resp:
             return resp.read()
+
+
+def _error_text(status: int, path: str, payload: bytes) -> str:
+    return f"Notion API error {status} for {path}: {payload[:300]!r}"
+
+
+def retry_delay(retry_after: Optional[str], default: float) -> float:
+    """Seconds to wait from a Retry-After header: delta-seconds or an
+    HTTP date; anything unreadable falls back to ``default``.
+    """
+    value = (retry_after or "").strip()
+    if not value:
+        return default
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return default
+    if when is None:
+        return default
+    return max(0.0, when.timestamp() - time.time())
 
 
 def page_title(obj: dict) -> str:
     """Extract the plain-text title from a page object."""
     for prop in obj.get("properties", {}).values():
         if prop.get("type") == "title":
-            return "".join(x.get("plain_text", "") for x in prop.get("title", [])).strip()
+            return "".join(
+                x.get("plain_text", "") for x in prop.get("title", [])
+            ).strip()
     return ""
+
+
+class BlockSource(Protocol):
+    """Anything that lists a block's children (BlockTree, test fakes)."""
+
+    def children(self, block_id: str) -> List[dict]:
+        """Return all child blocks of ``block_id``."""
+        ...
 
 
 class BlockTree:
@@ -128,6 +269,7 @@ class BlockTree:
         self.client = client
 
     def children(self, block_id: str) -> List[dict]:
+        """Return all child blocks of ``block_id``."""
         return self.client.get_block_children(block_id)
 
 

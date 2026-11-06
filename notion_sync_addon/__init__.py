@@ -4,32 +4,69 @@
 Structure created in your collection:
   a deck per configured Notion page -> a subdeck per table
     -> one card per row
+
+A sync never blocks the UI and never opens a progress window: the row
+cache is checked against the collection in a background QueryOp, Notion is
+read in a QueryOp that does not hold the collection, then the cards are
+written in a third QueryOp that records a single "Notion Sync" undo step
+(only when something changed). Progress shows on the "Notion Sync" link
+next to Anki's Sync in the top toolbar.
 """
+
 from __future__ import annotations
 
-import threading
-import traceback
-from typing import Any, Dict
+import json
+import os
+import re
+import sys
+from typing import Any, Callable, Dict, Optional
 
 from . import sync
 from .notion_api import NotionClient, page_title
 
 try:
     from aqt import gui_hooks, mw
-    from aqt.qt import (
-        QAction, QCheckBox, QDialog, QFormLayout, QGroupBox, QHBoxLayout,
-        QLabel, QHeaderView, QMenu, QMessageBox, QPushButton, QSpinBox,
-        QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QLineEdit,
-    )
-    from aqt.utils import showInfo, showWarning
+    from aqt.operations import QueryOp
+    from aqt.qt import QAction, QKeySequence, QMenu, QTimer
+    from aqt.theme import theme_manager
+    from aqt.utils import showWarning, tooltip
 
-    _IN_ANKI = True
-except ImportError:  # imported outside Anki (tests / tooling) - register nothing
+    # Anki imports add-ons once its main window exists; aqt imported by
+    # other tooling has no main window
+    _IN_ANKI = mw is not None
+except ImportError:  # imported outside Anki (tests / tooling)
     _IN_ANKI = False
 
 MENU_TITLE = "Notion Sync"
+TOOLBAR_IDLE_TEXT = "Notion Sync"
+TOOLBAR_LINK_ID = "notionsync"
+SHORTCUT = "Ctrl+Shift+Y"
+ADDON_DIR = os.path.dirname(os.path.abspath(__file__))
 
-_state: Dict[str, Any] = {"busy": False, "timer": None}
+_state: Dict[str, Any] = {
+    "busy": False,
+    # bumped by every sync: late progress callbacks of an older one are ignored
+    "generation": 0,
+    "timer": None,
+    "dialog": None,
+    "closing": False,
+    # True only while we call Anki's sync ourselves (synchronous call)
+    "followup_pending": False,
+    # True from that sync's sync_will_start to its sync_did_finish
+    "followup_running": False,
+    # set by Anki's sync error handler during the current AnkiWeb sync
+    "ankiweb_failed": False,
+    # warnings of the last automatic sync: only new ones raise a tooltip
+    "last_warnings": None,
+    # False when aqt.sync.handle_sync_error is missing: failed AnkiWeb syncs
+    # can't be told apart from successful ones
+    "probe": False,
+    # the _CloseGuard registered while a sync op uses the collection
+    "guard": None,
+}
+
+# name under which the close guard is registered with Anki's dialog manager
+CLOSE_GUARD_NAME = "NotionSyncWritingCards"
 
 
 def _config() -> dict:
@@ -40,98 +77,441 @@ def _config() -> dict:
 
 
 # --------------------------------------------------------------------- #
-# two-phase sync (network thread -> main thread collection writes)
+# status in the menu bar and top toolbar
 # --------------------------------------------------------------------- #
 
 
-def run_sync() -> None:
+def _toolbar_label(text: Optional[str]) -> str:
+    """Short label for the toolbar link: keeps the pill from jumping around."""
+    if text is None:
+        return TOOLBAR_IDLE_TEXT
+    count = re.search(r"\d+/\d+", text)
+    return f"Notion Sync {count.group(0)}" if count else "Notion Sync..."
+
+
+def _set_status(text: Optional[str] = None) -> None:
+    """Show progress on the toolbar link; ``None`` restores the idle state."""
+    label = _toolbar_label(text)
+    try:
+        mw.toolbar.web.eval(
+            "(function(){var e=document.getElementById("
+            f"{json.dumps(TOOLBAR_LINK_ID)});"
+            f"if(e)e.textContent={json.dumps(label)};}})();"
+        )
+    except Exception:  # toolbar not ready or replaced by another add-on
+        pass
+
+
+# --------------------------------------------------------------------- #
+# sync: prepare (collection) -> fetch (Notion, no collection) -> apply
+# --------------------------------------------------------------------- #
+
+
+def _no_changes() -> Any:
+    from anki.collection import OpChanges
+
+    return OpChanges()
+
+
+def _op_finished(changes: Any) -> None:
+    """Do what CollectionOp does after its op: refresh undo and screens."""
+    if mw.col is None:
+        return
+    try:
+        from aqt.operations import on_op_finished
+    except ImportError:  # pragma: no cover - older/newer aqt
+        mw.update_undo_actions()
+        gui_hooks.operation_did_execute(changes, None)
+        if mw.col.op_made_changes(changes):
+            gui_hooks.state_did_reset()
+        return
+    on_op_finished(mw, changes, None)
+
+
+class _CloseGuard:
+    """Makes Anki wait for a running sync op before it closes the collection.
+
+    Anki closes every window registered with its dialog manager before it
+    unloads the collection (closing the profile or Anki, a full sync) and
+    waits until each one has called back. While one of our ops uses the
+    collection, this stand-in is registered there: it calls back only when
+    the op has finished, so the collection is never closed under it.
+    """
+
+    def __init__(self) -> None:
+        self.callbacks: list = []
+
+    def closeWithCallback(
+        self, callback: Callable[[], None]
+    ) -> None:  # noqa: N802
+        self.callbacks.append(callback)
+        tooltip(
+            "Notion Sync: finishing the import before closing...", period=3000
+        )
+
+
+def _dialog_manager() -> Any:
+    try:
+        import aqt
+
+        return aqt.dialogs
+    except Exception:  # noqa: BLE001 - outside Anki
+        return None
+
+
+def _hold_collection() -> None:
+    """Keep Anki from closing the collection until _release_collection."""
+    if _state["guard"] is not None:
+        return
+    dialogs = _dialog_manager()
+    if dialogs is None or not hasattr(dialogs, "register_dialog"):
+        # older/newer aqt: an op cut short by closing just fails quietly
+        return
+    guard = _CloseGuard()
+    try:
+        dialogs.register_dialog(CLOSE_GUARD_NAME, _CloseGuard, guard)
+    except Exception:  # noqa: BLE001
+        return
+    _state["guard"] = guard
+
+
+def _release_collection() -> None:
+    guard = _state["guard"]
+    if guard is None:
+        return
+    _state["guard"] = None
+    dialogs = _dialog_manager()
+    try:
+        dialogs.markClosed(CLOSE_GUARD_NAME)
+    except Exception:  # noqa: BLE001
+        pass
+    for callback in guard.callbacks:  # Anki was waiting to close: go on
+        mw.taskman.run_on_main(callback)
+
+
+def run_sync(
+    manual: bool = True, full: bool = False, then_ankiweb: bool = False
+) -> None:
+    """Start a sync.
+
+    ``full`` ignores every cache. ``then_ankiweb`` uploads the result with a
+    second AnkiWeb sync when anything changed.
+    """
     if _state["busy"]:
-        showInfo("Notion Sync is already running.")
+        if manual:
+            tooltip("Notion Sync is already running.")
         return
     if mw.col is None:
-        showWarning("Notion Sync: no collection is open (no profile loaded).")
+        if manual:
+            showWarning(
+                "Notion Sync: no collection is open (no profile loaded)."
+            )
         return
 
     cfg = _config()
     if not cfg.get("notion_pages"):
-        showWarning(
-            "Notion Sync: no pages configured.\n"
-            "Open Tools > Add-ons > 'Notion Sync (official API)' > Config and add "
-            "at least one page_id."
-        )
+        if manual:
+            showWarning(
+                "Notion Sync: no pages configured.\n"
+                "Open Tools > Notion Sync > Settings and add a page."
+            )
         return
     if not sync.resolve_token(cfg):
-        showWarning(
-            "Notion Sync: no API token found.\n\n"
-            "Set 'notion_token' in the add-on config, or the NOTION_API_TOKEN "
-            "environment variable, or a .env file containing NOTION_API_TOKEN=... ."
-        )
+        if manual:
+            showWarning(
+                "Notion Sync: no API token found.\n\n"
+                "Set it in Tools > Notion Sync > Settings, or use the "
+                "NOTION_API_TOKEN environment variable, or a .env file "
+                "containing NOTION_API_TOKEN=... ."
+            )
         return
 
+    _state["generation"] += 1
+    generation = _state["generation"]
     _state["busy"] = True
-    mw.progress.start(label="Notion Sync: fetching from Notion...", immediate=True)
+    _set_status("starting...")
+    if cfg.get("sync_with_ankiweb"):  # no toolbar link to show progress on
+        tooltip("Notion Sync: reading Notion...", period=2500)
+    profile = mw.pm.name
+    path = sync.cache_path(ADDON_DIR, profile)
 
-    holder: Dict[str, Any] = {}
-    thread = threading.Thread(target=lambda: _fetch_worker(cfg, holder), daemon=True)
-    thread.start()
-    _poll_until_fetched(holder, then=lambda: _after_fetch(holder))
+    def current() -> bool:
+        return _state["generation"] == generation and _state["busy"]
 
+    def aborted() -> bool:
+        """Profile closed or switched since the sync started."""
+        return _state["closing"] or mw.col is None or mw.pm.name != profile
 
-def _fetch_worker(cfg: dict, holder: Dict[str, Any]) -> None:
+    def failed(exc: Exception) -> None:
+        _release_collection()
+        _finish(generation)
+        if _state["closing"]:
+            print(f"Notion Sync failed while closing: {exc}", file=sys.stderr)
+        elif manual:
+            showWarning(f"Notion Sync failed:\n{exc}")
+        else:
+            tooltip(f"Notion Sync failed: {exc}", period=6000)
+
+    def guarded(step: Callable[[Any], None]) -> Callable[[Any], None]:
+        """Wrap a success callback so it can't leave the sync busy."""
+
+        def run(value: Any) -> None:
+            try:
+                step(value)
+            except Exception as exc:  # noqa: BLE001
+                if isinstance(value, sync.SyncResult):
+                    value.cleanup()
+                failed(exc)
+
+        return run
+
+    def progress(message: str) -> None:  # called on the background thread
+        def show() -> None:
+            if current():
+                _set_status(message)
+
+        mw.taskman.run_on_main(show)
+
+    def prepare(col) -> "sync.Prepared":
+        return sync.prepare_sync(col, path, full)
+
+    def prepared(prep: "sync.Prepared") -> None:
+        _release_collection()
+        if aborted():
+            _finish(generation)
+            return
+
+        def fetch(_col) -> "sync.SyncResult":
+            result = sync.fetch_pages(
+                cfg,
+                prep.known,
+                progress,
+                prep.structure,
+                prep.previous,
+                prep.sources,
+            )
+            result.cache_path = path
+            return result
+
+        QueryOp(parent=mw, op=fetch, success=guarded(fetched)).failure(
+            failed
+        ).without_collection().run_in_background()
+
+    def fetched(result: "sync.SyncResult") -> None:
+        if aborted():
+            result.cleanup()
+            _finish(generation)
+            return
+        _set_status("importing cards...")
+        stats: Dict[str, int] = {}
+
+        def apply(col) -> None:
+            stats.update(sync.apply_sync(col, result))
+
+        def applied(_none: None) -> None:
+            try:
+                _finish(generation)
+                if result.changes is not None:
+                    _op_finished(result.changes)
+                _report(result, stats, manual)
+                changed = (
+                    stats.get("added", 0)
+                    + stats.get("updated", 0)
+                    + stats.get("removed", 0)
+                )
+                if then_ankiweb and changed:
+                    _upload_to_ankiweb()
+            finally:
+                _release_collection()
+
+        def apply_failed(exc: Exception) -> None:
+            try:
+                result.cleanup()
+                if (
+                    result.changes is not None
+                ):  # partial changes still form one undo step
+                    _op_finished(result.changes)
+                _finish(generation)
+                if _state["closing"] or mw.col is None:
+                    # the next sync rewrites whatever was left half done
+                    print(
+                        f"Notion Sync import interrupted: {exc}",
+                        file=sys.stderr,
+                    )
+                else:
+                    showWarning(f"Notion Sync failed while importing:\n{exc}")
+            finally:
+                _release_collection()
+
+        # a QueryOp, not a CollectionOp: CollectionOp always shows Anki's
+        # modal "Processing..." window; the undo step is made by apply_sync
+        _hold_collection()
+        QueryOp(parent=mw, op=apply, success=guarded(applied)).failure(
+            apply_failed
+        ).run_in_background()
+
     try:
-        holder["result"] = sync.fetch_pages(cfg)
-    except Exception as e:  # noqa: BLE001
-        holder["error"] = f"{e}\n{traceback.format_exc(limit=6)}"
-    holder["done"] = True
+        _hold_collection()
+        QueryOp(parent=mw, op=prepare, success=guarded(prepared)).failure(
+            failed
+        ).run_in_background()
+    except Exception as exc:  # noqa: BLE001
+        failed(exc)
 
 
-def _poll_until_fetched(holder: Dict[str, Any], then) -> None:
-    """Light main-thread polling: continues as soon as the fetch thread ends."""
-    timer = QTimer(mw)
-    timer.setInterval(150)
-    timer.setSingleShot(False)
-
-    def tick():
-        if holder.get("done"):
-            timer.stop()
-            timer.deleteLater()
-            then()
-
-    timer.timeout.connect(tick)
-    timer.start()
-
-
-def _after_fetch(holder: Dict[str, Any]) -> None:
-    _state["busy"] = False
-    mw.progress.finish()
-    if "error" in holder:
-        showWarning(f"Notion Sync failed:\n{holder['error']}")
+def _finish(generation: Optional[int] = None) -> None:
+    if generation is not None and generation != _state["generation"]:
         return
-    result = holder["result"]
+    _state["busy"] = False
+    _set_status(None)
 
-    for w in result.warnings:
-        showWarning(f"Notion Sync warning: {w}")
 
-    try:
-        mw.progress.start(label="Notion Sync: importing cards...", immediate=True)
-        stats = sync.apply_sync(mw.col, result)
-    finally:
-        mw.progress.finish()
-        result.cleanup()
+def _report(
+    result: "sync.SyncResult", stats: Dict[str, int], manual: bool
+) -> None:
+    parts = []
+    for key in ("added", "updated", "removed"):
+        if stats.get(key):
+            parts.append(f"{stats[key]} {key}")
+    if stats.get("unchanged"):
+        parts.append(f"{stats['unchanged']} unchanged")
+    summary = ", ".join(parts) or "nothing to sync"
+    if result.incomplete:
+        summary += " (cards of the parts that could not be read were kept)"
+    tooltip(f"<b>Notion Sync</b>: {summary}", period=5000)
 
-    n_tables = sum(len(p.tables) for p in result.pages)
-    summary = (
-        f"<b>Notion Sync finished.</b><br>"
-        f"{len(result.pages)} page(s) / {n_tables} table(s)<br>"
-        f"Added {stats['added']} &ndash; updated {stats['updated']} "
-        f"&ndash; removed {stats['removed']} &ndash; media {stats['media']}"
-    )
-    mw.reset()
-    showInfo(summary)
+    if not result.warnings:
+        _state["last_warnings"] = None
+        return
+    shown = result.warnings[:15]
+    more = len(result.warnings) - len(shown)
+    text = "\n".join(f"- {w}" for w in shown)
+    if more > 0:
+        text += f"\n... and {more} more"
+    if manual:
+        showWarning(f"Notion Sync finished with warnings:\n\n{text}")
+    elif result.warnings != _state["last_warnings"]:
+        # automatic syncs: a table that keeps failing only warns once
+        tooltip(
+            f"Notion Sync: {len(result.warnings)} warning(s). "
+            "Run Tools > Notion Sync > Sync Now to see them.",
+            period=6000,
+        )
+    _state["last_warnings"] = list(result.warnings)
 
 
 # --------------------------------------------------------------------- #
-# auto sync timer
+# AnkiWeb: pull Notion after Anki syncs, upload the result right away
+# --------------------------------------------------------------------- #
+
+
+def _install_sync_error_probe() -> None:
+    """sync_did_finish fires even when the AnkiWeb sync failed; Anki routes
+    every sync error through aqt.sync.handle_sync_error, so note it there.
+    """
+    try:
+        import aqt.sync as aqt_sync
+    except ImportError:
+        aqt_sync = None
+    original = getattr(aqt_sync, "handle_sync_error", None)
+    if original is None:
+        # Notion is still pulled after every AnkiWeb sync; the upload that
+        # follows only happens once Anki's status check succeeds and asks
+        # for a normal sync (see _upload_to_ankiweb)
+        _state["probe"] = False
+        print(
+            "Notion Sync: aqt.sync.handle_sync_error not found, "
+            "failed AnkiWeb "
+            "syncs can't be detected",
+            file=sys.stderr,
+        )
+        return
+    _state["probe"] = True
+    if getattr(original, "_notion_sync_probe", False):
+        return
+
+    def probe(*args: Any, **kwargs: Any) -> Any:
+        _state["ankiweb_failed"] = True
+        return original(*args, **kwargs)
+
+    probe._notion_sync_probe = True  # type: ignore[attr-defined]
+    aqt_sync.handle_sync_error = probe
+
+
+def _on_ankiweb_sync_will_start() -> None:
+    _state["ankiweb_failed"] = False
+    # a stale flag (a follow-up that never finished) must not swallow this sync
+    _state["followup_running"] = _state["followup_pending"]
+
+
+def _on_ankiweb_sync_finished(*_args: Any) -> None:
+    if _state["followup_running"]:  # our own upload sync: don't loop
+        _state["followup_running"] = False
+        return
+    if (
+        _state["ankiweb_failed"]
+        or _state["closing"]
+        or not _config().get("sync_with_ankiweb")
+    ):
+        return
+    run_sync(manual=False, then_ankiweb=True)
+
+
+def _can_upload() -> bool:
+    # without saved AnkiWeb credentials Anki would open its login dialog
+    return (
+        not _state["closing"]
+        and mw.col is not None
+        and bool(mw.pm.sync_auth())
+    )
+
+
+def _upload_to_ankiweb() -> None:
+    if not _can_upload():
+        return
+    try:
+        from aqt.sync import get_sync_status
+    except ImportError:  # pragma: no cover
+        if _state["probe"]:
+            _start_followup_sync()
+        return
+
+    def on_status(status: Any) -> None:
+        # Anki calls back only when the status check worked (it swallows
+        # errors), so a failing AnkiWeb never gets a follow-up sync
+        if status.required == status.FULL_SYNC:  # would ask upload/download
+            tooltip(
+                "Notion Sync: AnkiWeb needs a full sync; "
+                "press Sync to upload.",
+                period=6000,
+            )
+            return
+        if status.required != getattr(status, "NORMAL_SYNC", 1):
+            return  # nothing to upload
+        _start_followup_sync()
+
+    get_sync_status(mw, on_status)
+
+
+def _start_followup_sync() -> None:
+    if not _can_upload():
+        return
+    if (
+        mw.media_syncer.is_syncing()
+    ):  # the button would only open the media log
+        tooltip(
+            "Notion Sync: changes will be uploaded on the next AnkiWeb sync."
+        )
+        return
+    _state["followup_pending"] = True
+    try:
+        mw.on_sync_button_clicked()  # fires sync_will_start synchronously
+    finally:
+        _state["followup_pending"] = False
+
+
+# --------------------------------------------------------------------- #
+# auto sync timer and profile lifecycle
 # --------------------------------------------------------------------- #
 
 
@@ -144,7 +524,7 @@ def _schedule_autosync() -> None:
 
     def on_tick() -> None:
         if mw.col is not None and not _state["busy"]:
-            run_sync()
+            run_sync(manual=False)
 
     timer = QTimer(mw)
     timer.setInterval(interval_minutes * 60 * 1000)
@@ -154,6 +534,7 @@ def _schedule_autosync() -> None:
 
 
 def stop_autosync() -> None:
+    """Stop the auto-sync timer."""
     timer = _state.get("timer")
     if timer is not None:
         timer.stop()
@@ -161,343 +542,122 @@ def stop_autosync() -> None:
         _state["timer"] = None
 
 
+def _on_profile_open() -> None:
+    _state["closing"] = False
+    _state["followup_pending"] = False
+    _state["followup_running"] = False
+    _state["last_warnings"] = None
+    _schedule_autosync()
+
+
+def _on_profile_close() -> None:
+    # fires before Anki's close-time AnkiWeb sync: don't start Notion then
+    _state["closing"] = True
+    stop_autosync()
+
+
 # --------------------------------------------------------------------- #
-# settings dialog and menu
+# settings dialog, menus and toolbar
 # --------------------------------------------------------------------- #
-
-
-def _open_settings_legacy() -> None:
-    cfg = _config()
-    dialog = QDialog(mw)
-    dialog.setWindowTitle("Notion Sync Settings")
-    layout = QVBoxLayout(dialog)
-    form = QFormLayout()
-
-    token = QLineEdit(str(cfg.get("notion_token") or ""))
-    token.setEchoMode(QLineEdit.EchoMode.Password)
-    token.setPlaceholderText("secret_...")
-    form.addRow("Notion token:", token)
-
-    interval = QSpinBox()
-    interval.setRange(0, 10080)
-    interval.setSuffix(" minutes")
-    interval.setSpecialValueText("Off")
-    interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
-    form.addRow("Auto-sync interval:", interval)
-    layout.addLayout(form)
-
-    layout.addWidget(QLabel("Notion pages"))
-    pages = QListWidget()
-    for entry in cfg.get("notion_pages", []):
-        value = entry if isinstance(entry, str) else entry.get("page_id", "")
-        if value:
-            pages.addItem(str(value))
-    layout.addWidget(pages)
-
-    add_row = QHBoxLayout()
-    page_input = QLineEdit()
-    page_input.setPlaceholderText("Notion page URL or 32-character ID")
-    add_button = QPushButton("Add")
-    add_row.addWidget(page_input)
-    add_row.addWidget(add_button)
-    layout.addLayout(add_row)
-
-    def add_page() -> None:
-        raw = page_input.text().strip()
-        if not raw:
-            return
-        try:
-            sync.canonical_page_id(raw)
-        except sync.NotionError as exc:
-            QMessageBox.warning(dialog, "Invalid page", str(exc))
-            return
-        pages.addItem(raw)
-        page_input.clear()
-
-    add_button.clicked.connect(add_page)
-
-    buttons = QHBoxLayout()
-    save = QPushButton("Save")
-    cancel = QPushButton("Cancel")
-    buttons.addStretch(1)
-    buttons.addWidget(cancel)
-    buttons.addWidget(save)
-    layout.addLayout(buttons)
-    cancel.clicked.connect(dialog.reject)
-
-    def save_config() -> None:
-        values = [pages.item(i).text().strip() for i in range(pages.count())]
-        if not values:
-            QMessageBox.warning(dialog, "Missing pages", "Add at least one Notion page.")
-            return
-        mw.addonManager.writeConfig(
-            __name__,
-            {
-                "notion_token": token.text().strip(),
-                "notion_pages": values,
-                "sync_every_minutes": interval.value(),
-            },
-        )
-        _schedule_autosync()
-        dialog.accept()
-
-    save.clicked.connect(save_config)
-    dialog.exec()
 
 
 def _open_settings() -> None:
-    cfg = _config()
-    dialog = QDialog(mw)
-    dialog.setWindowTitle("Notion Sync Settings")
-    dialog.setMinimumWidth(560)
-    dialog.setStyleSheet(
-        """
-        QDialog { background: #ffffff; color: #18181b; }
-        QLabel { color: #18181b; font-size: 13px; }
-        QGroupBox {
-            background: #ffffff; border: 0; border-top: 1px solid #e4e4e7;
-            border-radius: 0; margin-top: 16px; padding: 14px 0 0;
-            font-weight: 600; font-size: 13px;
-        }
-        QGroupBox::title {
-            subcontrol-origin: margin; left: 0; padding: 0 8px 0 0;
-            color: #18181b;
-        }
-        QLineEdit, QListWidget, QSpinBox {
-            background: #ffffff; border: 1px solid #e4e4e7;
-            border-radius: 8px; padding: 8px; color: #18181b;
-            font-size: 13px;
-        }
-        QLineEdit:focus, QListWidget:focus, QSpinBox:focus {
-            border: 1px solid #18181b;
-        }
-        QListWidget::item { padding: 8px; border-radius: 6px; }
-        QListWidget::item:selected { background: #f4f4f5; color: #18181b; }
-        QCheckBox { spacing: 9px; color: #18181b; padding: 0; font-size: 13px; }
-        QCheckBox::indicator {
-            width: 16px; height: 16px; border-radius: 4px;
-            border: 1px solid #a1a1aa; background: #f4f4f5;
-        }
-        QCheckBox::indicator:checked {
-            background: #71717a; border-color: #71717a;
-        }
-        QPushButton {
-            background: #ffffff; border: 1px solid #e4e4e7;
-            border-radius: 8px; padding: 8px 15px; color: #18181b;
-            font-size: 13px;
-        }
-        QPushButton:hover { background: #f4f4f5; border-color: #a1a1aa; }
-        QPushButton:pressed { background: #e4e4e7; }
-        QPushButton#primary {
-            background: #18181b; border-color: #18181b;
-            color: #fafafa; font-weight: 500;
-        }
-        QPushButton#primary:hover { background: #3f3f46; }
-        """
-    )
-    layout = QVBoxLayout(dialog)
-    layout.setContentsMargins(20, 20, 20, 16)
-    layout.setSpacing(12)
+    from .settings_ui import SettingsDialog
 
-    intro = QLabel(
-        "<h2>Notion Sync</h2>"
-        "<p>Choose the pages to sync and how often Anki should check Notion.</p>"
-    )
-    intro.setObjectName("intro")
-    intro.setWordWrap(True)
-    layout.addWidget(intro)
+    def lookup_name(page_id: str, token: str) -> str:
+        client = NotionClient(sync.resolve_token({"notion_token": token}))
+        return page_title(client.get_page(page_id))
 
-    connection = QGroupBox("Connection")
-    connection_form = QFormLayout(connection)
-    token = QLineEdit(str(cfg.get("notion_token") or ""))
-    token.setEchoMode(QLineEdit.EchoMode.Password)
-    token.setPlaceholderText("Paste your Notion integration token")
-    token.setClearButtonEnabled(True)
-    token_row = QHBoxLayout()
-    token_row.setContentsMargins(0, 0, 0, 0)
-    show_token = QPushButton("Show")
-    show_token.setCheckable(True)
-    show_token.setFixedWidth(70)
-    token_row.addWidget(token)
-    token_row.addWidget(show_token)
-
-    def toggle_token(visible: bool) -> None:
-        token.setEchoMode(
-            QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
-        )
-        show_token.setText("Hide" if visible else "Show")
-
-    show_token.toggled.connect(toggle_token)
-    connection_form.addRow("Notion token", token_row)
-    layout.addWidget(connection)
-
-    behavior = QGroupBox("Sync behavior")
-    behavior_layout = QVBoxLayout(behavior)
-    interval = QSpinBox()
-    interval.setRange(0, 10080)
-    interval.setSuffix(" minutes")
-    interval.setSpecialValueText("Off")
-    interval.setValue(max(0, int(cfg.get("sync_every_minutes") or 0)))
-    interval_label = QLabel("Auto-sync interval in minutes (0 = off)")
-    behavior_layout.addWidget(interval_label)
-    behavior_layout.addWidget(interval)
-    empty_cards = QCheckBox("Add rows without a title as empty cards")
-    empty_cards.setChecked(bool(cfg.get("include_empty_cards", True)))
-    empty_cards.setToolTip(
-        "When enabled, rows with no title still become cards with an empty front."
-    )
-    behavior_layout.addWidget(empty_cards)
-    layout.addWidget(behavior)
-
-    pages_group = QGroupBox("Notion pages")
-    pages_layout = QVBoxLayout(pages_group)
-    hint = QLabel("Add a page URL or its 32-character ID.")
-    hint.setStyleSheet("color: palette(mid);")
-    pages_layout.addWidget(hint)
-    pages = QTableWidget(0, 2)
-    pages.setHorizontalHeaderLabels(["Page", "ID"])
-    pages.setMinimumHeight(130)
-    pages.setAlternatingRowColors(True)
-    pages.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-    pages.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-    pages.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    pages.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-    pages.verticalHeader().setVisible(False)
-
-    def page_name(page_id: str) -> str:
-        try:
-            client = NotionClient(sync.resolve_token({"notion_token": token.text()}))
-            return page_title(client.get_page(page_id)) or "Untitled page"
-        except Exception:
-            return "Name unavailable"
-
-    def add_page_row(page_id: str, name: str = "") -> None:
-        row = pages.rowCount()
-        pages.insertRow(row)
-        pages.setItem(row, 0, QTableWidgetItem(name or page_name(page_id)))
-        pages.setItem(row, 1, QTableWidgetItem(page_id))
-
-    for entry in cfg.get("notion_pages", []):
-        value = entry if isinstance(entry, str) else entry.get("page_id", "")
-        if value:
-            try:
-                add_page_row(sync.canonical_page_id(str(value)))
-            except sync.NotionError:
-                add_page_row(str(value), "Invalid page ID")
-    pages_layout.addWidget(pages)
-
-    add_row = QHBoxLayout()
-    page_input = QLineEdit()
-    page_input.setPlaceholderText("https://app.notion.com/p/... or page ID")
-    add_button = QPushButton("Add page")
-    add_button.setDefault(True)
-    add_row.addWidget(page_input)
-    add_row.addWidget(add_button)
-    pages_layout.addLayout(add_row)
-
-    page_actions = QHBoxLayout()
-    remove_button = QPushButton("Remove")
-    remove_button.setEnabled(False)
-    page_actions.addWidget(remove_button)
-    page_actions.addStretch(1)
-    page_count = QLabel()
-    page_actions.addWidget(page_count)
-    pages_layout.addLayout(page_actions)
-    layout.addWidget(pages_group)
-
-    def update_page_state() -> None:
-        page_count.setText(f"{pages.rowCount()} page(s)")
-        remove_button.setEnabled(pages.currentRow() >= 0)
-
-    pages.itemSelectionChanged.connect(update_page_state)
-
-    def remove_page() -> None:
-        row = pages.currentRow()
-        if row >= 0:
-            pages.removeRow(row)
-            update_page_state()
-
-    remove_button.clicked.connect(remove_page)
-
-    def add_page() -> None:
-        raw = page_input.text().strip()
-        if not raw:
-            return
-        try:
-            page_id = sync.canonical_page_id(raw)
-        except sync.NotionError as exc:
-            QMessageBox.warning(dialog, "Invalid page", str(exc))
-            return
-        existing_ids = {
-            pages.item(i, 1).text()
-            for i in range(pages.rowCount())
-        }
-        if page_id in existing_ids:
-            QMessageBox.information(dialog, "Already added", "That page is already in the list.")
-            return
-        add_page_row(page_id)
-        page_input.clear()
-        update_page_state()
-
-    add_button.clicked.connect(add_page)
-    page_input.returnPressed.connect(add_page)
-    update_page_state()
-
-    def save_config() -> None:
-        values = [
-            pages.item(i, 1).text().strip()
-            for i in range(pages.rowCount())
-        ]
-        if not values:
-            QMessageBox.warning(dialog, "Missing pages", "Add at least one Notion page.")
-            return False
-        mw.addonManager.writeConfig(
-            __name__,
-            {
-                "notion_token": token.text().strip(),
-                "notion_pages": values,
-                "include_empty_cards": empty_cards.isChecked(),
-                "sync_every_minutes": interval.value(),
-            },
-        )
+    def on_save(new_cfg: dict) -> None:
+        mw.addonManager.writeConfig(__name__, new_cfg)
         _schedule_autosync()
-        return True
+        _redraw_toolbar()  # show/hide the toolbar link
 
-    buttons = QHBoxLayout()
-    cancel = QPushButton("Cancel")
-    apply = QPushButton("Apply")
-    save = QPushButton("Save & close")
-    sync_now = QPushButton("Sync now")
-    save.setObjectName("primary")
-    buttons.addStretch(1)
-    buttons.addWidget(cancel)
-    buttons.addWidget(apply)
-    buttons.addWidget(sync_now)
-    buttons.addWidget(save)
-    layout.addLayout(buttons)
+    try:
+        problems = sync.load_problems(sync.cache_path(ADDON_DIR, mw.pm.name))
+    except Exception:  # noqa: BLE001 - the dialog must open regardless
+        problems = []
+    dialog = SettingsDialog(
+        _config(),
+        canonical_page_id=sync.canonical_page_id,
+        lookup_name=lookup_name,
+        on_save=on_save,
+        on_sync=run_sync,
+        parent=mw,
+        dark=theme_manager.night_mode,
+        problems=problems,
+    )
+    _state["dialog"] = dialog
+    try:
+        dialog.exec()
+    finally:
+        _state["dialog"] = None
+        dialog.deleteLater()  # parented to mw: would otherwise live until exit
 
-    cancel.clicked.connect(dialog.reject)
-    apply.clicked.connect(save_config)
-    save.clicked.connect(lambda: (save_config() and dialog.accept()))
-    sync_now.clicked.connect(lambda: (save_config() and (dialog.accept(), run_sync())))
 
-    dialog.exec()
+def _on_theme_changed() -> None:
+    dialog = _state.get("dialog")
+    if dialog is not None:
+        dialog.apply_theme(theme_manager.night_mode)
 
 
-def _build_menu() -> None:
-    menu = QMenu(MENU_TITLE, mw)
-    mw.form.menuTools.addMenu(menu)
-
-    act_sync = QAction("Sync Now", mw)
-    act_sync.triggered.connect(run_sync)
+def _fill_menu(menu: QMenu) -> None:
+    """Tools > Notion Sync."""
+    act_sync = QAction("Sync Now", menu)
+    act_sync.setShortcut(QKeySequence(SHORTCUT))
+    act_sync.triggered.connect(lambda: run_sync())
     menu.addAction(act_sync)
 
-    act_settings = QAction("Settings", mw)
+    act_full = QAction("Full Resync (re-download every row)", menu)
+    act_full.triggered.connect(lambda: run_sync(full=True))
+    menu.addAction(act_full)
+
+    menu.addSeparator()
+    act_settings = QAction("Settings", menu)
     act_settings.triggered.connect(_open_settings)
     menu.addAction(act_settings)
 
 
+def _on_toolbar_links(links: list, toolbar: Any) -> None:
+    """One-click "Notion Sync" right after Anki's Sync link.
+
+    Hidden when Anki's own Sync button already syncs Notion.
+    """
+    if _config().get("sync_with_ankiweb"):
+        return
+    label = _toolbar_label("" if _state["busy"] else None)
+    links.append(
+        toolbar.create_link(
+            "notionsync",
+            label,
+            lambda: run_sync(),
+            tip=f"Sync cards from Notion ({SHORTCUT})",
+            id=TOOLBAR_LINK_ID,
+        )
+    )
+
+
+def _redraw_toolbar() -> None:
+    try:
+        mw.toolbar.draw()
+    except Exception:  # toolbar not ready or replaced by another add-on
+        pass
+
+
+def _build_menu() -> None:
+    menu = QMenu(MENU_TITLE, mw)
+    _fill_menu(menu)
+    mw.form.menuTools.addMenu(menu)
+
+
 if _IN_ANKI:
-    gui_hooks.profile_did_open.append(_schedule_autosync)
-    gui_hooks.profile_will_close.append(stop_autosync)
+    gui_hooks.profile_did_open.append(_on_profile_open)
+    gui_hooks.profile_will_close.append(_on_profile_close)
+    gui_hooks.sync_will_start.append(_on_ankiweb_sync_will_start)
+    gui_hooks.sync_did_finish.append(_on_ankiweb_sync_finished)
+    gui_hooks.theme_did_change.append(_on_theme_changed)
+    gui_hooks.top_toolbar_did_init_links.append(_on_toolbar_links)
+    _install_sync_error_probe()
+    # Tools > Add-ons > Config opens our dialog instead of the JSON editor
+    mw.addonManager.setConfigAction(__name__, _open_settings)
     _build_menu()
