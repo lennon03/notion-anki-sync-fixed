@@ -47,7 +47,7 @@
     the lines after the asked one (`:has()`), so the front shows the
     previous lines as cues and the back shows the whole text. No extra note
     type, so no field-count limit.
-- [ ] **Export to a chosen note type.** Let the user pick which Anki note type
+- [x] **Export to a chosen note type.** Let the user pick which Anki note type
   (and so which card design) a table's rows use, instead of always using
   "Notion Sync Card". Needs a per-table setting in the settings dialog and a
   mapping from Notion content to that note type's fields (title -> Front,
@@ -68,6 +68,15 @@
     keep syncing in their type; Browse > Change Note Type to one of the
     used types keeps them synced. Cloze rows always use "Notion Sync
     Cloze".
+  - *Implemented, with these details:* the table -> type map is a
+    `tables` entry (database id -> note type id) and every chosen type ever
+    used is remembered in a `used` entry of the same `notionSync.noteTypes`
+    dict, so old roles keep working and notes stay found after a switch.
+    Saving the choice is one undo step (QueryOp, close guard, queued while a
+    sync runs). Fields beyond the title and page are compared on each
+    downloaded row so a changed column updates the note; the fingerprint
+    still covers title, page and tags only. A cloze note turning basic is
+    replaced by a note of the chosen type.
 
 - [x] **Custom styling presets.** Let the user pick a card style in settings
   (e.g. a T3 Ocean light/dark look matching the settings dialog, a minimal

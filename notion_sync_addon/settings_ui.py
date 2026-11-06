@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Callable, List, Optional, cast
+from typing import Callable, Dict, List, Optional, Tuple, cast
 
 from . import styles
 
@@ -767,6 +767,11 @@ class SettingsDialog(QDialog):
         on_save: receives the new config dict.
         on_sync: called after a successful "Sync now" save.
         problems: what the last sync could not read, shown above the pages.
+        tables: (page id, [(database id, title)...]) the last sync saw.
+        note_types: (id, name) of the note types a table can export to.
+        table_types: database id -> id of the note type chosen so far.
+        on_note_types: receives {database id: note type id (0 = default)}
+            for the tables whose choice changed.
     """
 
     def __init__(
@@ -780,6 +785,10 @@ class SettingsDialog(QDialog):
         dark: bool = False,
         problems: Optional[List[str]] = None,
         preview: Optional[Callable[[QWidget, str, bool], None]] = None,
+        tables: Optional[List[Tuple[str, List[Tuple[str, str]]]]] = None,
+        note_types: Optional[List[Tuple[int, str]]] = None,
+        table_types: Optional[Dict[str, int]] = None,
+        on_note_types: Optional[Callable[[Dict[str, int]], None]] = None,
     ) -> None:
         super().__init__(parent)
         use_theme(dark)
@@ -805,6 +814,11 @@ class SettingsDialog(QDialog):
         self._page_rows: dict = {}
         self._preview = preview or show_text_preview
         self._dark = dark
+        self._tables = list(tables or [])
+        self._note_types = list(note_types or [])
+        self._table_types = dict(table_types or {})
+        self._on_note_types = on_note_types
+        self._type_combos: Dict[str, QComboBox] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -828,6 +842,7 @@ class SettingsDialog(QDialog):
         self._build_connection(cfg)
         self._build_sync(cfg)
         self._build_cards(cfg)
+        self._build_note_types()
         self._build_pages(cfg)
         self._body.addStretch(1)
 
@@ -991,6 +1006,51 @@ class SettingsDialog(QDialog):
     def selected_style(self) -> str:
         """Return the key of the chosen card style."""
         return str(self.card_style.currentData() or styles.DEFAULT_PRESET)
+
+    def _build_note_types(self) -> None:
+        """One note type picker per table the last sync saw."""
+        self._section("Note types")
+        card = Card()
+        self.note_types_card = card
+        if not self._tables or self._on_note_types is None:
+            card.add_row(
+                setting_row(
+                    "No tables yet",
+                    "Tables appear here after the first sync. Each can "
+                    "export new rows to one of your own note types.",
+                )
+            )
+            self._body.addWidget(card)
+            return
+        for _page_id, entries in self._tables:
+            for db_id, title in entries:
+                combo = QComboBox()
+                combo.setObjectName("choice")
+                combo.addItem("Notion Sync Card (default)", 0)
+                for mid, name in self._note_types:
+                    combo.addItem(name, mid)
+                saved = self._table_types.get(db_id, 0)
+                combo.setCurrentIndex(max(combo.findData(saved), 0))
+                row = setting_row(
+                    title or "Untitled table",
+                    "New rows only: cards already synced keep their note "
+                    "type. Needs a type with a Source field.",
+                    control=combo,
+                )
+                for lbl in row.findChildren(QLabel):
+                    lbl.setTextFormat(Qt.TextFormat.PlainText)  # user data
+                card.add_row(row)
+                self._type_combos[db_id] = combo
+        self._body.addWidget(card)
+
+    def chosen_note_types(self) -> Dict[str, int]:
+        """Return {database id: note type id} for the tables changed."""
+        out: Dict[str, int] = {}
+        for db_id, combo in self._type_combos.items():
+            mid = int(combo.currentData() or 0)
+            if mid != self._table_types.get(db_id, 0):
+                out[db_id] = mid
+        return out
 
     def _show_preview(self) -> None:
         document = styles.preview_document(self.selected_style(), self._dark)
@@ -1258,4 +1318,11 @@ class SettingsDialog(QDialog):
             self.page_input.setFocus()
             return False
         self._on_save(self.config())
+        changed = self.chosen_note_types()
+        if changed and self._on_note_types is not None:
+            self._on_note_types(changed)
+            self._table_types.update({k: v for k, v in changed.items() if v})
+            for db_id, mid in changed.items():
+                if not mid:
+                    self._table_types.pop(db_id, None)
         return True

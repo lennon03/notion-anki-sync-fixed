@@ -66,6 +66,12 @@ UNDO_NAME = "Notion Sync"
 # (synced via AnkiWeb): role ("basic", ...) -> note type id. The name is only
 # the fallback, so renaming a note type in Anki changes nothing.
 NOTE_TYPES_KEY = "notionSync.noteTypes"
+# Two more entries of that dict, not roles: table (database id) -> id of the
+# note type its new rows use, and the ids of every chosen type ever used
+# (their notes stay synced after the choice changes).
+TABLES_KEY = "tables"
+USED_KEY = "used"
+RESERVED_KEYS = (TABLES_KEY, USED_KEY)
 # Fixed field positions of the basic type: names can be renamed in Anki.
 FRONT, BACK, SOURCE = 0, 1, 2
 # The add-on owns the tags under this prefix (Anki tags are case-insensitive)
@@ -841,11 +847,132 @@ def find_model(col, role: str = "basic") -> Optional[dict]:
 def own_model_ids(col) -> Dict[str, int]:
     """Role -> note type id of the add-on's own types that exist."""
     out: Dict[str, int] = {}
-    for role in sorted(set(_registry(col)) | set(MODEL_NAMES)):
+    roles = (set(_registry(col)) | set(MODEL_NAMES)) - set(RESERVED_KEYS)
+    for role in sorted(roles):
         model = find_model(col, role)
         if model is not None and model.get("id"):
             out[role] = int(model["id"])
     return out
+
+
+def _int_id(value: Any) -> Optional[int]:
+    if isinstance(value, int) and not isinstance(value, bool) and value:
+        return value
+    return None
+
+
+def table_note_types(col) -> Dict[str, int]:
+    """Table (database id) -> id of the note type chosen for its new rows.
+
+    Entries whose note type no longer exists are left out.
+    """
+    stored = _registry(col).get(TABLES_KEY)
+    out: Dict[str, int] = {}
+    if isinstance(stored, dict):
+        for db_id, mid in stored.items():
+            mid = _int_id(mid)
+            if mid is not None and col.models.get(mid) is not None:
+                out[_bare(str(db_id))] = mid
+    return out
+
+
+def _used_model_ids(col) -> List[int]:
+    """Ids of every chosen note type the add-on has ever used (and that
+    still exist): their notes stay synced after the choice changes.
+    """
+    registry = _registry(col)
+    ids = set(table_note_types(col).values())
+    stored = registry.get(USED_KEY)
+    if isinstance(stored, list):
+        for mid in stored:
+            mid = _int_id(mid)
+            if mid is not None and col.models.get(mid) is not None:
+                ids.add(mid)
+    return sorted(ids - set(own_model_ids(col).values()))
+
+
+def _source_index(model: dict) -> Optional[int]:
+    """Position of the field named Source (None unless there is exactly
+    one, after the title and page fields).
+    """
+    found = [
+        i
+        for i, fld in enumerate(model.get("flds") or [])
+        if str(fld.get("name", "")).strip().casefold() == "source"
+    ]
+    return found[0] if len(found) == 1 and found[0] >= 2 else None
+
+
+def eligible_note_types(col) -> List[Tuple[int, str]]:
+    """(id, name) of the note types a table's rows can be exported to.
+
+    Standard (not cloze) types with at least three fields, one of them
+    named Source, and no note already holding a Source value, so the user's
+    own notes can never be mistaken for synced ones. A type the add-on
+    already uses is always eligible. The add-on's own types are left out
+    (they are the default and the cloze type).
+    """
+    own = set(own_model_ids(col).values())
+    used = set(_used_model_ids(col))
+    out: List[Tuple[int, str]] = []
+    for model in col.models.all():
+        mid = int(model["id"])
+        index = _source_index(model)
+        if (
+            mid in own
+            or model.get("type") != 0
+            or len(model.get("flds") or []) < 3
+            or index is None
+        ):
+            continue
+        if mid not in used and _has_source(col, mid, index):
+            continue
+        out.append((mid, str(model["name"])))
+    return sorted(out, key=lambda item: item[1].casefold())
+
+
+def _has_source(col, mid: int, index: int) -> bool:
+    for (flds,) in col.db.all("select flds from notes where mid = ?", mid):
+        parts = flds.split("\x1f")
+        if len(parts) > index and parts[index].strip():
+            return True
+    return False
+
+
+def set_table_note_types(col, changes: Dict[str, int]) -> bool:
+    """Choose the note type of tables: database id -> note type id, 0 for
+    the default. Tables not named stay as they are. Ids that are not
+    eligible are ignored. One undo step, only when something changed.
+    """
+    registry = _registry(col)
+    stored = registry.get(TABLES_KEY)
+    tables: Dict[str, int] = {}
+    if isinstance(stored, dict):
+        tables = {_bare(str(k)): v for k, v in stored.items() if _int_id(v)}
+    eligible = {mid for mid, _name in eligible_note_types(col)}
+    for db_id, mid in changes.items():
+        key = _bare(db_id)
+        if not mid:
+            tables.pop(key, None)
+        elif mid in eligible:
+            tables[key] = mid
+    used = registry.get(USED_KEY)
+    used_ids = (
+        [m for m in used if _int_id(m)] if isinstance(used, list) else []
+    )
+    for mid in tables.values():
+        if mid not in used_ids:
+            used_ids.append(mid)
+    if tables == (stored or {}) and used_ids == (used or []):
+        return False
+    if tables:
+        registry[TABLES_KEY] = tables
+    else:
+        registry.pop(TABLES_KEY, None)
+    if used_ids:
+        registry[USED_KEY] = used_ids
+    col.set_config(NOTE_TYPES_KEY, registry, undoable=True)
+    return True
 
 
 def _remember_model(
@@ -872,12 +999,21 @@ class SyncedNote(NamedTuple):
 def synced_notes(col) -> Dict[str, List[SyncedNote]]:
     """Source id -> synced notes, oldest first.
 
-    One SQL query over the add-on's own note types. Only notes whose Source
-    is a Notion row id count: notes without one, or with anything else in it
-    (added by hand), are left out and never touched. Fields are read by
-    position, so renaming them in Anki changes nothing.
+    One SQL query over the add-on's own note types and the types chosen for
+    tables. Only notes whose Source is a Notion row id count: notes without
+    one, or with anything else in it (added by hand), are left out and never
+    touched. Fields of the own types are read by position, so renaming them
+    in Anki changes nothing; a chosen type is found by its Source field.
     """
-    mids = sorted(set(own_model_ids(col).values()))
+    # note type id -> position of its Source field
+    positions: Dict[int, int] = {
+        mid: SOURCE for mid in set(own_model_ids(col).values())
+    }
+    for mid in _used_model_ids(col):
+        index = _source_index(col.models.get(mid) or {})
+        if index is not None:
+            positions[mid] = index
+    mids = sorted(positions)
     if not mids:
         return {}
     marks = ",".join("?" * len(mids))
@@ -888,9 +1024,9 @@ def synced_notes(col) -> Dict[str, List[SyncedNote]]:
     out: Dict[str, List[SyncedNote]] = {}
     for nid, mid, flds, tags in col.db.all(sql, *mids):
         parts = flds.split("\x1f")
-        if len(parts) <= SOURCE:
+        if len(parts) <= positions[mid]:
             continue
-        source = parts[SOURCE].strip()
+        source = parts[positions[mid]].strip()
         if not SOURCE_ID.fullmatch(source):
             continue
         fp = fingerprint(
@@ -948,6 +1084,21 @@ def prepare_sync(col, path: str, full: bool = False) -> Prepared:
         sources=set(notes),
         media_folder=media_folder,
     )
+
+
+def known_tables(
+    path: str, page_ids: Iterable[str]
+) -> List[Tuple[str, List[Tuple[str, str]]]]:
+    """(page id, [(database id, title)...]) the last sync saw, for the
+    configured pages that have tables (for the settings dialog).
+    """
+    pages = load_cache(path).pages
+    out: List[Tuple[str, List[Tuple[str, str]]]] = []
+    for page_id in page_ids:
+        entry = pages.get(page_id)
+        if entry and entry[2]:
+            out.append((page_id, [(str(d), str(t)) for d, t in entry[2]]))
+    return out
 
 
 def load_problems(path: str) -> List[str]:
@@ -1502,6 +1653,9 @@ def _bare(notion_id: str) -> str:
     return str(notion_id or "").replace("-", "").lower()
 
 
+bare_id = _bare
+
+
 def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
     """Look up synced notes that no table listed and whose origin is unknown.
 
@@ -1813,6 +1967,48 @@ def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
     return [unicodedata.normalize("NFC", f) for f in fields]
 
 
+def _field_plan(
+    model: dict, own_ids: Set[int], row: RowCard
+) -> Optional[Dict[int, str]]:
+    """Fields of a note of ``model`` besides the first two: position ->
+    text. The Source gets the row id; in a chosen note type any other field
+    named like a Notion column gets that column's text. None if the type
+    has no usable Source field.
+    """
+    if int(model["id"]) in own_ids:
+        return {SOURCE: row.source_id}
+    index = _source_index(model)
+    if index is None:
+        return None
+    plan = {index: row.source_id}
+    props = {
+        k.strip().casefold(): v
+        for k, v in (row.columns.props if row.columns else {}).items()
+    }
+    for position, fld in enumerate(model["flds"]):
+        name = str(fld.get("name", "")).strip().casefold()
+        if position > BACK and position != index and name in props:
+            plan[position] = unicodedata.normalize(
+                "NFC", html.escape(props[name], quote=False)
+            )
+    return plan
+
+
+def _plan_stale(note, plan: Dict[int, str]) -> bool:
+    """Tell whether a note holds something else than the plan says."""
+    return any(
+        i < len(note.fields) and note.fields[i] != value
+        for i, value in plan.items()
+    )
+
+
+def _set_fields(note, front: str, back: str, plan: Dict[int, str]) -> None:
+    note.fields[FRONT] = front
+    note.fields[BACK] = back
+    for i, value in plan.items():
+        note.fields[i] = value
+
+
 class _UndoStep:
     """One "Notion Sync" undo entry, created only once something changes.
 
@@ -1999,6 +2195,10 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     model = _get_or_create_model(col, undo.begin, card_css(result.config))
     _remember_model(col, "basic", model, undo.begin)
     own: Dict[str, dict] = {}  # the cloze type, once a cloze row needs it
+    own_ids = set(own_model_ids(col).values())
+    cloze_now = find_model(col, "cloze")
+    cloze_id = int(cloze_now["id"]) if cloze_now else None
+    chosen_types = table_note_types(col)
     imported_names = _import_media(col, result)
 
     notes = synced_notes(col)
@@ -2008,6 +2208,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     for page in result.pages:
         for table in page.tables:
             deck_id: Optional[int] = None
+            chosen = _chosen_model(col, chosen_types, table, result)
             for row in table.rows:
                 if row.source_id in handled:
                     continue  # the same row twice in one sync: written once
@@ -2061,10 +2262,31 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                 front, back = _row_fields(row, imported_names)
                 written = fingerprint(front, back, tags=owned_key(row.tags))
                 is_cloze = row.kind in ("cloze", "overlapping")
-                target = model
+                target = chosen or model
                 if is_cloze:
                     target = _cloze_model(col, own, undo, result)
-                replacing = entry is not None and entry.mid != target["id"]
+                    own_ids.add(int(target["id"]))
+                # A basic row keeps its note whatever (non-cloze) type it is
+                # in: a changed choice only affects rows without a note.
+                replacing = entry is not None and (
+                    entry.mid != target["id"]
+                    if is_cloze
+                    else entry.mid == cloze_id
+                )
+                soft = is_cloze or target["id"] not in own_ids
+                plan: Optional[Dict[int, str]] = None
+                if nid is None or replacing:
+                    plan = _field_plan(target, own_ids, row)
+                elif entry is not None:
+                    plan = _field_plan(
+                        col.models.get(entry.mid) or model, own_ids, row
+                    )
+                if plan is None:  # unusable Source field: stay safe
+                    result.warnings.append(
+                        f"Row '{row.front}': its note type has no usable "
+                        "Source field; skipped"
+                    )
+                    continue
                 if nid is None or replacing:
                     undo.begin()
                     home = (
@@ -2077,9 +2299,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                             col, f"{page.deck_name}::{table.title}"
                         )
                     note = Note(col, target)
-                    note.fields[FRONT] = front
-                    note.fields[BACK] = back
-                    note.fields[SOURCE] = row.source_id
+                    _set_fields(note, front, back, plan)
                     note.tags = list(row.tags)
                     if replacing:
                         assert entry is not None
@@ -2088,11 +2308,11 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     try:
                         col.add_note(note, home or deck_id)
                     except Exception as e:  # noqa: BLE001 - e.g. no cloze
-                        if not is_cloze:
+                        if not soft:
                             raise
                         result.warnings.append(
-                            f"Row '{row.front}': Anki refused the cloze "
-                            f"note ({e}); the row is tried again next sync"
+                            f"Row '{row.front}': Anki refused the note "
+                            f"({e}); the row is tried again next sync"
                         )
                         continue
                     if replacing:
@@ -2107,20 +2327,24 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                         added.add(row.source_id)
                         stats["added"] += 1
                     nid = note.id
-                elif current != written:
+                elif current != written or (
+                    len(plan) > 1 and _plan_stale(col.get_note(nid), plan)
+                ):
                     undo.begin()
                     note = col.get_note(nid)
-                    note.fields[FRONT] = front
-                    note.fields[BACK] = back
+                    _set_fields(note, front, back, plan)
                     note.tags = _with_tags(note.tags, row.tags)
                     try:
                         col.update_note(note)
                     except Exception as e:  # noqa: BLE001 - e.g. no cloze
-                        if not is_cloze:
+                        if not (
+                            is_cloze
+                            or (entry is not None and entry.mid not in own_ids)
+                        ):
                             raise
                         result.warnings.append(
-                            f"Row '{row.front}': Anki refused the cloze "
-                            f"note ({e}); the row is tried again next sync"
+                            f"Row '{row.front}': Anki refused the note "
+                            f"({e}); the row is tried again next sync"
                         )
                         continue
                     stats["updated"] += bump
@@ -2137,6 +2361,29 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
     return stats
+
+
+def _chosen_model(
+    col, chosen: Dict[str, int], table: TableData, result: SyncResult
+) -> Optional[dict]:
+    """Return the note type chosen for a table's new rows (None = default)."""
+    mid = chosen.get(_bare(table.db_id))
+    if not mid:
+        return None
+    model = col.models.get(mid)
+    if (
+        model is None
+        or model.get("type") != 0
+        or len(model.get("flds") or []) < 3
+        or _source_index(model) is None
+    ):
+        result.warnings.append(
+            f"Table '{table.title}': the chosen note type can no longer be "
+            "used (it needs 3 fields, one named Source); "
+            "new rows use Notion Sync Card"
+        )
+        return None
+    return model
 
 
 def _resolved(html: str, imported_names: Dict[str, str]) -> str:

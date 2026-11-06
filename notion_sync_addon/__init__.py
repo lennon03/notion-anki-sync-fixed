@@ -65,6 +65,8 @@ _state: Dict[str, Any] = {
     "guard": None,
     # card style picked while a sync was running: applied once it ends
     "pending_style": None,
+    # note types chosen while a sync was running: stored once it ends
+    "pending_types": {},
 }
 
 # name under which the close guard is registered with Anki's dialog manager
@@ -378,6 +380,10 @@ def _finish(generation: Optional[int] = None) -> None:
         _state["pending_style"] = None
         # queued: the finishing sync releases its close guard first
         mw.taskman.run_on_main(lambda: _apply_card_style(preset))
+    types = _state.get("pending_types")
+    if types and not _state["closing"] and not preset:
+        _state["pending_types"] = {}
+        mw.taskman.run_on_main(lambda: _apply_note_types(types))
 
 
 def _report(
@@ -624,6 +630,48 @@ def _apply_card_style(preset: str) -> None:
     QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
 
 
+def _apply_note_types(changes: Dict[str, int]) -> None:
+    """Store the note types chosen for tables, in the background.
+
+    Runs like a card style change: never next to a sync (a choice made
+    during one is stored right after it), guarded against the collection
+    closing, and one undo step only when the choice changed.
+    """
+    if mw.col is None or not changes:
+        return
+    if _state["busy"]:
+        _state["pending_types"].update(changes)
+        return
+    _state["generation"] += 1
+    generation = _state["generation"]
+    _state["busy"] = True
+
+    def op(col: Any) -> bool:
+        return sync.set_table_note_types(col, changes)
+
+    def done(changed: bool) -> None:
+        try:
+            _finish(generation)
+            if changed and mw.col is not None:
+                _op_finished(_no_changes())
+                tooltip("Note types saved; new rows use them")
+        finally:
+            _release_collection()
+
+    def failed(exc: Exception) -> None:
+        try:
+            _finish(generation)
+            if not _state["closing"]:
+                showWarning(
+                    f"Notion Sync: could not save the note types:\n{exc}"
+                )
+        finally:
+            _release_collection()
+
+    _hold_collection()
+    QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
+
+
 def _web_preview(parent: Any, document: str, _dark: bool) -> None:
     """Show the sample card in an AnkiWebView (Anki's own renderer)."""
     from aqt.qt import QDialog, Qt, QVBoxLayout
@@ -662,8 +710,33 @@ def _open_settings() -> None:
         problems = sync.load_problems(sync.cache_path(ADDON_DIR, mw.pm.name))
     except Exception:  # noqa: BLE001 - the dialog must open regardless
         problems = []
+    config = _config()
+    tables: list = []
+    note_types: list = []
+    table_types: Dict[str, int] = {}
+    try:
+        page_ids = [
+            sync.canonical_page_id(
+                str(p if isinstance(p, str) else p["page_id"])
+            )
+            for p in config.get("notion_pages", [])
+        ]
+        tables = sync.known_tables(
+            sync.cache_path(ADDON_DIR, mw.pm.name), page_ids
+        )
+        if mw.col is not None and tables:
+            note_types = sync.eligible_note_types(mw.col)
+            stored = sync.table_note_types(mw.col)
+            table_types = {
+                db: stored[sync.bare_id(db)]
+                for _page, entries in tables
+                for db, _title in entries
+                if sync.bare_id(db) in stored
+            }
+    except Exception:  # noqa: BLE001 - the dialog must open regardless
+        tables = []
     dialog = SettingsDialog(
-        _config(),
+        config,
         canonical_page_id=sync.canonical_page_id,
         lookup_name=lookup_name,
         on_save=on_save,
@@ -672,6 +745,10 @@ def _open_settings() -> None:
         dark=theme_manager.night_mode,
         problems=problems,
         preview=_web_preview,
+        tables=tables,
+        note_types=note_types,
+        table_types=table_types,
+        on_note_types=_apply_note_types,
     )
     _state["dialog"] = dialog
     try:

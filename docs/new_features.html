@@ -87,9 +87,16 @@
 <h2>Safer note type handling</h2>
 <p>The add-on remembers its note types by id, stored in the collection and shared through AnkiWeb. Renaming the note type or its fields in Anki no longer creates duplicates. New media files are copied into Anki's media folder during the Notion fetch.</p>
 
+<h2>Your own note type per table</h2>
+<p>After a first sync, Settings has a <strong>Note types</strong> section listing each table with a picker: <em>Notion Sync Card (default)</em> or one of your own note types. A type is offered when it is not a cloze type, has at least three fields, one of them named <em>Source</em>, and holds no notes with a Source yet. The first field gets the row title, the second the page (with its context), <em>Source</em> the row id, and any other field named like a Notion column gets that column's text. Saving is one undo step.</p>
+<ul>
+  <li>Only new rows use the chosen type. Cards already synced stay in their type and keep syncing; nothing is converted, moved or deleted, so switching never makes duplicates.</li>
+  <li>Cloze rows always use <em>Notion Sync Cloze</em>.</li>
+  <li>Your own notes in that type are left alone: only notes whose Source is a Notion row id count as synced.</li>
+</ul>
+
 <h2>Not built</h2>
 <ul>
-  <li><strong>Choosing your own note type per table.</strong> Decided and written up in <code>TODO.md</code>, not implemented yet.</li>
   <li><strong>Anki to Notion sync.</strong> Deliberately not built, since it would break "Notion is the source of truth". See <code>docs/sync-direction.md</code>.</li>
 </ul>
 
@@ -97,6 +104,7 @@
 <ul>
   <li>Overlapping cloze on your phone.</li>
   <li>Card style preview and apply in Anki.</li>
+  <li>Note type picker in Settings, then a sync with a new row.</li>
   <li>Close Anki during a sync, and press X twice.</li>
 </ul>
 </main>
