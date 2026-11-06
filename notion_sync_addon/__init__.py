@@ -292,6 +292,8 @@ def run_sync(
                 prep.structure,
                 prep.previous,
                 prep.sources,
+                media_folder=prep.media_folder,
+                should_stop=aborted,
             )
             result.cache_path = path
             return result

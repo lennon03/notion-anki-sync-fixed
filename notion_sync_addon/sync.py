@@ -188,6 +188,7 @@ class Prepared:
     structure: Dict[str, dict]
     previous: Cache
     sources: Set[str] = field(default_factory=set)  # Sources of synced notes
+    media_folder: str = ""  # the collection's media folder ("" if unknown)
 
 
 class SyncResult:
@@ -610,9 +611,17 @@ def prepare_sync(col, path: str, full: bool = False) -> Prepared:
     """Load the cache and check it against the collection (background op)."""
     previous = load_cache(path)
     notes = synced_notes(col)
+    try:
+        media_folder = str(col.media.dir())
+    except Exception:  # noqa: BLE001 - staging media is only an optimisation
+        media_folder = ""
     if full:  # Full Resync: trust nothing, but keep row origins for removal
         return Prepared(
-            known={}, structure={}, previous=previous, sources=set(notes)
+            known={},
+            structure={},
+            previous=previous,
+            sources=set(notes),
+            media_folder=media_folder,
         )
     known = trusted_rows(previous, notes)
     structure: Dict[str, dict] = {
@@ -620,7 +629,11 @@ def prepare_sync(col, path: str, full: bool = False) -> Prepared:
         "dbs": dict(previous.dbs),
     }
     return Prepared(
-        known=known, structure=structure, previous=previous, sources=set(notes)
+        known=known,
+        structure=structure,
+        previous=previous,
+        sources=set(notes),
+        media_folder=media_folder,
     )
 
 
@@ -655,6 +668,8 @@ def fetch_pages(
     structure: Optional[Dict[str, dict]] = None,
     previous: Optional[Cache] = None,
     sources: Optional[Set[str]] = None,
+    media_folder: str = "",
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> SyncResult:
     """Read all configured pages. Rows in ``known`` that were not edited
     since they were fetched are returned as ``unchanged`` placeholders.
@@ -664,6 +679,8 @@ def fetch_pages(
     ``sources`` are the Sources of the synced notes in the collection: when
     part of Notion can't be read, unlisted ones of unknown origin are
     looked up so they can be removed or kept for certain.
+    New media files are copied into ``media_folder`` here, without the
+    collection, until ``should_stop()`` says to give up.
     """
     client = NotionClient(resolve_token(cfg))
     tree = BlockTree(client)
@@ -717,6 +734,7 @@ def fetch_pages(
         result.media_files, result.failed_media = _download_media(
             client, media, result.media_dir, result.progress
         )
+        _stage_media(result, media_folder, should_stop)
         _forget_rows_with_failed_media(result)
     except BaseException:
         result.cleanup()
@@ -1287,6 +1305,51 @@ def _same_file(a: str, b: str) -> bool:
         )
     except OSError:
         return False
+
+
+def _stage_media(
+    result: SyncResult,
+    media_folder: str,
+    should_stop: Optional[Callable[[], bool]] = None,
+) -> None:
+    """Copy downloaded files that are new into the media folder.
+
+    Done by the fetch step, which does not hold the collection; the write
+    step then finds each file under its name with the same bytes and skips
+    it. A name that is already taken is left to Anki's ``add_file``, and a
+    file that can't be copied is simply imported by the write step.
+    """
+    if not media_folder or not result.media_files:
+        return
+    try:
+        taken = {n.casefold() for n in os.listdir(media_folder)}
+    except OSError:
+        return
+    for path, fname in result.media_files:
+        if should_stop is not None and should_stop():
+            return
+        name = os.path.split(fname)[-1]
+        target = os.path.join(media_folder, name)
+        if name.casefold() in taken or os.path.exists(target):
+            continue
+        tmp = ""
+        try:
+            fd, tmp = tempfile.mkstemp(
+                prefix=".ns-stage-", suffix=".tmp", dir=media_folder
+            )
+            with os.fdopen(fd, "wb") as out, open(path, "rb") as src:
+                shutil.copyfileobj(src, out)
+            os.replace(tmp, target)
+            tmp = ""
+            taken.add(name.casefold())
+        except OSError:
+            pass
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
 
 def _import_media(col, result: SyncResult) -> Dict[str, str]:
