@@ -35,6 +35,7 @@ import unicodedata
 import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from html import escape
 from typing import (
     Any,
     Callable,
@@ -46,6 +47,7 @@ from typing import (
     Set,
     Tuple,
 )
+from urllib.parse import urlsplit
 
 from .htmlify import MediaCollector, render_blocks
 from .notion_api import (
@@ -96,6 +98,11 @@ AGE_SPREAD_SECONDS = 7 * 24 * 3600
 # Rows showing content that can change without bumping their last-edited
 # time (page mentions, synced block copies) are checked again this often.
 VOLATILE_MAX_AGE_SECONDS = 3600
+# Rows with a Context column: the linked page can change while the row's own
+# last-edited time stays put, so they are checked again this often.
+CONTEXT_MAX_AGE_SECONDS = 24 * 3600
+# RowState.volatile level -> how long the cached content is trusted
+VOLATILE_AGES = {1: VOLATILE_MAX_AGE_SECONDS, 2: CONTEXT_MAX_AGE_SECONDS}
 # When part of Notion can't be read, notes whose row origin is unknown are
 # looked up one by one (GET /pages/<row>); at most this many per sync.
 MAX_ORIGIN_CHECKS = 25
@@ -127,7 +134,9 @@ class RowState:
     fingerprint: str = ""  # hash of the Front/Back the add-on wrote
     page_id: str = ""  # configured page and table the row was last seen in
     db_id: str = ""
-    volatile: bool = False  # content can change without bumping `edited`
+    # content can change without bumping `edited`: 0 = no, 1 = checked
+    # hourly (mentions, synced copies), 2 = daily (a Context column)
+    volatile: int = 0
 
     def to_json(self) -> list:
         """Return the compact list stored in the cache file."""
@@ -152,7 +161,7 @@ class RowState:
                 str(value[2]),
                 str(value[3]),
                 str(value[4]),
-                bool(value[5]),
+                max(0, min(2, int(value[5]))),  # older caches: false/true
             )
         except (TypeError, ValueError):
             return None
@@ -185,6 +194,7 @@ class RowCard:
     tags: List[str] = field(default_factory=list)  # Notion::... tags
     unchecked: bool = False  # sync checkbox off: no card, content not read
     columns: Optional["RowColumns"] = None  # the row's parsed properties
+    context_html: str = ""  # the Context column's pages, same placeholders
 
 
 @dataclass
@@ -227,6 +237,9 @@ class SyncResult:
         self.media_files: List[Tuple[str, str]] = []  # (abs path, fname)
         self.failed_media: Set[str] = set()
         self.warnings: List[str] = []
+        # context page id -> rendered html, and those showing live content
+        self.context_cache: Dict[str, str] = {}
+        self.context_live: Set[str] = set()
         # trusted row cache before this run / cache entries after it
         self.known: Dict[str, RowState] = {}
         self.fetched: Dict[str, RowState] = {}
@@ -630,14 +643,16 @@ def is_unchanged(
 ) -> bool:
     """Tell whether the cached content is still what Notion has.
 
-    A volatile row (page mentions, synced block copies) can change without
-    its last_edited_time moving, so it is only trusted for an hour.
+    A volatile row can change without its last_edited_time moving: with page
+    mentions or synced block copies it is only trusted for an hour, with a
+    Context column for a day.
     """
     if cached is None:
         return False
-    if cached.volatile:
+    limit = VOLATILE_AGES.get(cached.volatile)
+    if limit:
         now = time.time() if now is None else now
-        if now - cached.fetched_at >= VOLATILE_MAX_AGE_SECONDS:
+        if now - cached.fetched_at >= limit:
             return False
     return _fresh(cached.edited, cached.fetched_at, edited, key, now)
 
@@ -1314,6 +1329,9 @@ def _fetch_table(
         recorder = _RecordingTree(tree)
         try:
             back = render_blocks(recorder.children(row["id"]), media, recorder)
+            context = _render_context(
+                columns.context, client, tree, recorder, media, result
+            )
         except NotionError as e:
             # still listed in Notion: keep its note, retry next sync
             result.protected.add(row_id)
@@ -1331,19 +1349,105 @@ def _fetch_table(
             "",
             page_id,
             db_id,
-            recorder.volatile or live_title,
+            _volatile_level(recorder.volatile or live_title, columns),
         )
         table.rows.append(
             RowCard(
                 source_id=row_id,
                 front=front,
                 back_html=back,
+                context_html=context,
                 url=row.get("url", ""),
                 tags=tags,
                 columns=columns,
             )
         )
     return table
+
+
+def _volatile_level(live: bool, columns: "RowColumns") -> int:
+    """RowState.volatile: hourly for live content, daily for a context."""
+    return 1 if live else (2 if columns.context else 0)
+
+
+def _context_id(entry: str) -> str:
+    """Return the Notion page id of a context entry ("" for other links)."""
+    if re.fullmatch(r"[0-9a-f]{32}", entry):
+        return entry
+    host = (urlsplit(entry).hostname or "").lower()
+    if host == "notion.so" or host.endswith((".notion.so", ".notion.site")):
+        try:
+            return canonical_page_id(entry)
+        except NotionError:
+            return ""
+    return ""
+
+
+def _context_page(
+    page_id: str,
+    client: NotionClient,
+    tree: BlockSource,
+    media: MediaCollector,
+    result: SyncResult,
+) -> Tuple[str, bool]:
+    """Render one context page once per sync: (html, shows live content).
+
+    A page Notion refuses (not shared) becomes a link and a warning; any
+    transient error is raised, so the row is retried.
+    """
+    if page_id in result.context_cache:
+        return result.context_cache[page_id], page_id in result.context_live
+    sub = _RecordingTree(tree)
+    try:
+        title = page_title(client.get_page(page_id)) or "Untitled"
+        body = render_blocks(sub.children(page_id), media, sub)
+        html = (
+            f'<details class="ns-context"><summary>Context: {escape(title)}'
+            f"</summary>{body}</details>"
+        )
+    except NotionError as e:
+        if getattr(e, "transient", False):
+            raise
+        html = (
+            '<p class="ns-context"><a href="https://www.notion.so/'
+            f'{page_id}">Context</a></p>'
+        )
+        result.warnings.append(
+            f"Context page {page_id[:8]}... could not be read "
+            f"({_reason(e)}): is it shared with the integration? "
+            "A link is shown instead"
+        )
+    result.context_cache[page_id] = html
+    if sub.volatile:
+        result.context_live.add(page_id)
+    return html, sub.volatile
+
+
+def _render_context(
+    entries: List[str],
+    client: NotionClient,
+    tree: BlockSource,
+    recorder: "_RecordingTree",
+    media: MediaCollector,
+    result: SyncResult,
+) -> str:
+    """Render a row's Context column; pages with live content make the row
+    hourly (via ``recorder``).
+    """
+    out: List[str] = []
+    for entry in entries:
+        page_id = _context_id(entry)
+        if page_id:
+            html, live = _context_page(page_id, client, tree, media, result)
+            recorder.volatile = recorder.volatile or live
+            out.append(html)
+        elif urlsplit(entry).scheme in ("http", "https"):
+            link = escape(entry, quote=True)
+            out.append(
+                f'<p class="ns-context"><a href="{link}">Context: '
+                f"{escape(entry)}</a></p>"
+            )
+    return "".join(out)
 
 
 def _bare(notion_id: str) -> str:
@@ -1479,7 +1583,9 @@ def _forget_rows_with_failed_media(result: SyncResult) -> None:
             for row in table.rows:
                 if (
                     row.unchanged
-                    or not set(_PLACEHOLDER.findall(row.back_html))
+                    or not set(
+                        _PLACEHOLDER.findall(row.back_html + row.context_html)
+                    )
                     & result.failed_media
                 ):
                     continue
@@ -1826,10 +1932,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                         _forget(result, row.source_id)
                     continue
                 front = unicodedata.normalize("NFC", row.front)
-                back = unicodedata.normalize(
-                    "NFC",
-                    MediaCollector.resolve(row.back_html, imported_names),
-                )
+                back = _back_with_context(row, imported_names)
                 written = fingerprint(front, back, tags=owned_key(row.tags))
                 if nid is None:
                     undo.begin()
@@ -1867,6 +1970,20 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
     return stats
+
+
+def _resolved(html: str, imported_names: Dict[str, str]) -> str:
+    """Fill in the media names of a rendered part (NFC, like Anki)."""
+    return unicodedata.normalize(
+        "NFC", MediaCollector.resolve(html, imported_names)
+    )
+
+
+def _back_with_context(row: RowCard, imported_names: Dict[str, str]) -> str:
+    """Return the Back of a basic note: the page, then its context."""
+    return _resolved(row.back_html, imported_names) + _resolved(
+        row.context_html, imported_names
+    )
 
 
 def _stored_fingerprint(note) -> str:
