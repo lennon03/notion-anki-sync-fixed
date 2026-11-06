@@ -33,6 +33,14 @@
   its notes even though the note type differs. Related to the cloze items
   above: cloze is one specific note type.
 
+- [ ] **Custom styling presets.** Let the user pick a card style in settings
+  (e.g. a T3 Ocean light/dark look matching the settings dialog, a minimal
+  one, Anki's default) and preview it before applying. Note: today
+  `_get_or_create_model` resets the note type's CSS to the built-in style on
+  every sync, so any CSS edited by hand in Anki is overwritten. Presets should
+  fix that: only write CSS when the user picks a preset, and offer a "Custom
+  (keep my CSS)" option.
+
 ## Content
 
 - [ ] **Tags.** Turn Notion data into Anki tags, two possible sources:
