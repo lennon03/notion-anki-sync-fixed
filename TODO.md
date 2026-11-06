@@ -110,16 +110,29 @@ Notion should always win. Known gaps, deferred from the review of PR #1:
   skips `synced_block`, `column_list`/`column`, `link_to_page` and
   `child_page` blocks, so that content never reaches the card. Rendering
   synced block copies needs their original's children; rows with copies are
-  already always re-downloaded (their original can change without bumping
-  the row's last-edited time), so rendering them is safe to add. Bump
-  RENDER_VERSION when this changes.
-- [ ] **Show tables that keep failing somewhere persistent.** A table that
-  can't be read (e.g. a linked database view, or a table moved to the trash)
-  keeps its old cards and is reported in the warnings of every manual sync
-  (automatic syncs only show a tooltip when the warnings change). A line in
-  the settings dialog listing the failing tables would be easier to act on.
+  already re-checked every hour (their original can change without bumping
+  the row's last-edited time), so rendering them is safe to add. If edits to
+  an original must show up sooner than that, lower
+  `VOLATILE_MAX_AGE_SECONDS` or track the originals' own last-edited times.
+  Bump RENDER_VERSION when this changes.
+- [ ] **Old mixed-case media files stay behind.** Media file names are now
+  lowercase (Anki on Windows stored them lowercased but handed back the
+  mixed-case name on re-imports). On Linux/macOS, files imported by older
+  versions under mixed-case names are no longer used once their rows are
+  re-rendered; Tools > Check Media lists them as unused. Decide whether the
+  add-on should delete `ns-*` files no synced card references.
+- [ ] **Media import still holds the collection.** Identical re-downloaded
+  files are no longer imported again, but new or changed files are imported
+  inside the write step (about 2 ms per file on Windows), so a first sync of
+  a page with hundreds of images keeps reviews waiting for a second or two.
+  Importing media in the background step before the write, guarded against
+  the profile closing, would shorten it.
 
 ## Done
+
+- [x] **Show tables that keep failing somewhere persistent.** Done: the cache
+  file keeps what the last sync couldn't read, and the settings dialog shows
+  it in a warning card above the Notion pages.
 
 - [x] **Decide on the "Notion" toolbar link.** Decided in 1.2.1: when
   "Anki's Sync button also syncs Notion" is on there is no extra button;
