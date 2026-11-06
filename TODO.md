@@ -43,6 +43,15 @@
 
 ## Content
 
+- [ ] **Syntax highlighting for code blocks.** Today a Notion code block becomes
+  plain monospace text: htmlify drops the block's `language`. Keep the language
+  (e.g. `class="language-python"`) and highlight it. Options: highlight at sync
+  time in Python (static HTML with inline colors, works offline and on every
+  Anki client, but needs a highlighter such as Pygments bundled in the add-on),
+  or ship a small JS highlighter (highlight.js / Prism) in the note type's
+  template via collection media (lighter add-on, but runs on every card
+  render). Colors should follow the card style, light and dark (see the
+  styling presets item).
 - [ ] **Tags.** Turn Notion data into Anki tags, two possible sources:
   - a dedicated column (multi-select or text) whose values become tags;
   - strikethrough text inside the card's page: struck-through words become
