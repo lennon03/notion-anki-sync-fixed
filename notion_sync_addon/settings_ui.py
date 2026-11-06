@@ -760,6 +760,7 @@ class SettingsDialog(QDialog):
         self.resize(680, 830)
         self.setMinimumWidth(560)
 
+        self._cfg = dict(cfg)
         self._canonical = canonical_page_id
         self._lookup = lookup_name
         self._on_save = on_save
@@ -1158,14 +1159,22 @@ class SettingsDialog(QDialog):
             self.status.setText(f"{n} page{'s' if n != 1 else ''} · {auto}")
 
     def config(self) -> dict:
-        """Return the config as currently entered."""
-        return {
-            "notion_token": self.token.text().strip(),
-            "notion_pages": self.page_ids(),
-            "include_empty_cards": self.empty_cards.isChecked(),
-            "sync_with_ankiweb": self.with_ankiweb.isChecked(),
-            "sync_every_minutes": self.interval.value(),
-        }
+        """Return the config as currently entered.
+
+        Keys the dialog doesn't show (e.g. column names) are kept as they
+        were.
+        """
+        out = dict(self._cfg)
+        out.update(
+            {
+                "notion_token": self.token.text().strip(),
+                "notion_pages": self.page_ids(),
+                "include_empty_cards": self.empty_cards.isChecked(),
+                "sync_with_ankiweb": self.with_ankiweb.isChecked(),
+                "sync_every_minutes": self.interval.value(),
+            }
+        )
+        return out
 
     def save(self) -> bool:
         """Pass the config to ``on_save``; False if it isn't complete."""
