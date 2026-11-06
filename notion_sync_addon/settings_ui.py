@@ -15,10 +15,13 @@ import os
 import threading
 from typing import Callable, List, Optional, cast
 
+from . import styles
+
 try:
     from aqt.qt import (
         QAbstractButton,
         QColor,
+        QComboBox,
         QDesktopServices,
         QDialog,
         QFont,
@@ -38,6 +41,7 @@ try:
         QSize,
         QSpinBox,
         Qt,
+        QTextBrowser,
         QToolButton,
         QUrl,
         QVariantAnimation,
@@ -67,6 +71,7 @@ except ImportError:  # standalone preview
     )
     from PyQt6.QtWidgets import (  # type: ignore[no-redef,unused-ignore]
         QAbstractButton,
+        QComboBox,
         QDialog,
         QFrame,
         QHBoxLayout,
@@ -75,6 +80,7 @@ except ImportError:  # standalone preview
         QPushButton,
         QScrollArea,
         QSpinBox,
+        QTextBrowser,
         QToolButton,
         QVBoxLayout,
         QWidget,
@@ -300,6 +306,20 @@ QLineEdit#input {{
 }}
 QLineEdit#input:focus {{ border-color: {p['RING']}; }}
 QLineEdit#input[invalid="true"] {{ border-color: {p['INVALID_BORDER']}; }}
+
+QComboBox#choice {{
+    background: {p['FIELD']};
+    border: 1px solid {p['INPUT']};
+    border-radius: 8px;
+    min-height: 30px; padding: 0 11px; font-size: 14px;
+    color: {p['FOREGROUND']};
+}}
+QComboBox#choice:focus {{ border-color: {p['RING']}; }}
+QComboBox#choice QAbstractItemView {{
+    background: {p['POPOVER']}; color: {p['FOREGROUND']};
+    selection-background-color: {p['ACCENT']};
+    selection-color: {p['FOREGROUND']};
+}}
 
 QFrame#numberField {{
     background: {p['FIELD']};
@@ -724,6 +744,19 @@ def _name_signals() -> _NameSignals:
     return _NAME_SIGNALS[0]
 
 
+def show_text_preview(parent: QWidget, document: str, dark: bool) -> None:
+    """Show the sample card in a plain QTextBrowser (crude CSS support)."""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Card style preview")
+    dialog.resize(560, 520)
+    lay = QVBoxLayout(dialog)
+    view = QTextBrowser()
+    view.setHtml(document)
+    lay.addWidget(view)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.show()
+
+
 class SettingsDialog(QDialog):
     """Notion Sync settings, laid out like a T3 Code settings panel.
 
@@ -746,6 +779,7 @@ class SettingsDialog(QDialog):
         parent: Optional[QWidget] = None,
         dark: bool = False,
         problems: Optional[List[str]] = None,
+        preview: Optional[Callable[[QWidget, str, bool], None]] = None,
     ) -> None:
         super().__init__(parent)
         use_theme(dark)
@@ -769,6 +803,8 @@ class SettingsDialog(QDialog):
         self._signals.resolved.connect(self._apply_name)
         self._problems = list(problems or [])
         self._page_rows: dict = {}
+        self._preview = preview or show_text_preview
+        self._dark = dark
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -791,6 +827,7 @@ class SettingsDialog(QDialog):
 
         self._build_connection(cfg)
         self._build_sync(cfg)
+        self._build_cards(cfg)
         self._build_pages(cfg)
         self._body.addStretch(1)
 
@@ -800,6 +837,7 @@ class SettingsDialog(QDialog):
     def apply_theme(self, dark: bool) -> None:
         """Restyle in place when Anki switches between light and dark."""
         use_theme(dark)
+        self._dark = dark
         self.setStyleSheet(build_stylesheet(P))
         refresh_icons(self)
         for edit in self.findChildren(QLineEdit):
@@ -921,6 +959,42 @@ class SettingsDialog(QDialog):
             )
         )
         self._body.addWidget(card)
+
+    def _build_cards(self, cfg: dict) -> None:
+        self._section("Cards")
+        card = Card()
+        self.card_style = QComboBox()
+        self.card_style.setObjectName("choice")
+        for key, text in styles.PRESET_LABELS.items():
+            self.card_style.addItem(text, key)
+        saved = str(cfg.get("card_style") or styles.DEFAULT_PRESET)
+        index = self.card_style.findData(saved)
+        self.card_style.setCurrentIndex(max(index, 0))
+        self.preview_button = button("Preview")
+        self.preview_button.clicked.connect(self._show_preview)
+        controls = QWidget()
+        lay = QHBoxLayout(controls)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self.card_style)
+        lay.addWidget(self.preview_button)
+        card.add_row(
+            setting_row(
+                "Card style",
+                "Applied once to the note types this add-on creates when "
+                "you save. Pick Custom to keep your own CSS.",
+                control=controls,
+            )
+        )
+        self._body.addWidget(card)
+
+    def selected_style(self) -> str:
+        """Return the key of the chosen card style."""
+        return str(self.card_style.currentData() or styles.DEFAULT_PRESET)
+
+    def _show_preview(self) -> None:
+        document = styles.preview_document(self.selected_style(), self._dark)
+        self._preview(self, document, self._dark)
 
     def _build_problems(self) -> None:
         """Warning card: what the last sync couldn't read."""
@@ -1172,6 +1246,7 @@ class SettingsDialog(QDialog):
                 "include_empty_cards": self.empty_cards.isChecked(),
                 "sync_with_ankiweb": self.with_ankiweb.isChecked(),
                 "sync_every_minutes": self.interval.value(),
+                "card_style": self.selected_style(),
             }
         )
         return out

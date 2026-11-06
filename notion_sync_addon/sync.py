@@ -1524,18 +1524,29 @@ def _no_change() -> None:
     pass
 
 
+def card_css(cfg: Optional[dict]) -> str:
+    """CSS for a note type the add-on creates: the chosen style preset.
+
+    "Custom" (or an unknown name) creates it with the classic style.
+    """
+    from .styles import DEFAULT_PRESET, css_for
+
+    preset = str((cfg or {}).get("card_style") or DEFAULT_PRESET)
+    return css_for(preset) or MODEL_CSS
+
+
 def _get_or_create_model(
-    col, before_change: Callable[[], None] = _no_change
+    col,
+    before_change: Callable[[], None] = _no_change,
+    css: str = MODEL_CSS,
 ) -> dict:
-    """Find or build the 'Notion Sync Card' note type."""
+    """Find or build the 'Notion Sync Card' note type.
+
+    An existing note type is left as it is: its CSS is only written when
+    the user picks a card style in the settings (see styles.apply_preset).
+    """
     model = find_model(col)
     if model is not None:
-        if model.get("css") != MODEL_CSS:
-            before_change()
-            model["css"] = MODEL_CSS
-            save = getattr(col.models, "save", None)
-            if save is not None:
-                save(model)
         return model
 
     before_change()
@@ -1552,7 +1563,7 @@ def _get_or_create_model(
         "afmt": "{{Front}}<hr id=answer>{{Back}}",
     }
     col.models.add_template(model, template)
-    model["css"] = MODEL_CSS
+    model["css"] = css
     col.models.add_dict(model)
     refreshed = col.models.by_name(MODEL_NAME)
     return refreshed if refreshed is not None else model
@@ -1741,7 +1752,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
         "media": len(result.media_files),
     }
     _drop_legacy_state(col, undo.begin)
-    model = _get_or_create_model(col, undo.begin)
+    model = _get_or_create_model(col, undo.begin, card_css(result.config))
     _remember_model(col, "basic", model, undo.begin)
     imported_names = _import_media(col, result)
 

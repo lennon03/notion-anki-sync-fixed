@@ -21,7 +21,7 @@ import re
 import sys
 from typing import Any, Callable, Dict, Optional
 
-from . import sync
+from . import styles, sync
 from .notion_api import NotionClient, page_title
 
 try:
@@ -63,6 +63,8 @@ _state: Dict[str, Any] = {
     "probe": False,
     # the _CloseGuard registered while a sync op uses the collection
     "guard": None,
+    # card style picked while a sync was running: applied once it ends
+    "pending_style": None,
 }
 
 # name under which the close guard is registered with Anki's dialog manager
@@ -371,6 +373,11 @@ def _finish(generation: Optional[int] = None) -> None:
         return
     _state["busy"] = False
     _set_status(None)
+    preset = _state.get("pending_style")
+    if preset and not _state["closing"]:
+        _state["pending_style"] = None
+        # queued: the finishing sync releases its close guard first
+        mw.taskman.run_on_main(lambda: _apply_card_style(preset))
 
 
 def _report(
@@ -570,6 +577,71 @@ def _on_profile_close() -> None:
 # --------------------------------------------------------------------- #
 
 
+def _own_model_ids(col: Any) -> list:
+    """Ids of the note types this add-on owns."""
+    return list(sync.own_model_ids(col).values())
+
+
+def _apply_card_style(preset: str) -> None:
+    """Write the preset to our note types in the background (one undo step).
+
+    Runs like a sync: never next to one (their undo steps would mix; a
+    preset picked during a sync is applied right after it), and Anki
+    waits for it before closing the collection.
+    """
+    if mw.col is None or styles.css_for(preset) is None:
+        return
+    if _state["busy"]:
+        _state["pending_style"] = preset
+        return
+    _state["generation"] += 1
+    generation = _state["generation"]
+    _state["busy"] = True
+
+    def op(col: Any) -> bool:
+        return styles.apply_preset(col, preset, _own_model_ids(col))
+
+    def done(changed: bool) -> None:
+        try:
+            _finish(generation)
+            if changed and mw.col is not None:
+                _op_finished(_no_changes())
+                tooltip("Card style applied")
+        finally:
+            _release_collection()
+
+    def failed(exc: Exception) -> None:
+        try:
+            _finish(generation)
+            if not _state["closing"]:
+                showWarning(
+                    f"Notion Sync: could not apply the card style:\n{exc}"
+                )
+        finally:
+            _release_collection()
+
+    _hold_collection()
+    QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
+
+
+def _web_preview(parent: Any, document: str, _dark: bool) -> None:
+    """Show the sample card in an AnkiWebView (Anki's own renderer)."""
+    from aqt.qt import QDialog, Qt, QVBoxLayout
+    from aqt.webview import AnkiWebView
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Card style preview")
+    dialog.resize(560, 520)
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(0, 0, 0, 0)
+    web = AnkiWebView(parent=dialog)
+    layout.addWidget(web)
+    web.stdHtml(document)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.finished.connect(web.cleanup)
+    dialog.show()
+
+
 def _open_settings() -> None:
     from .settings_ui import SettingsDialog
 
@@ -578,7 +650,11 @@ def _open_settings() -> None:
         return page_title(client.get_page(page_id))
 
     def on_save(new_cfg: dict) -> None:
+        previous = _config().get("card_style") or styles.DEFAULT_PRESET
         mw.addonManager.writeConfig(__name__, new_cfg)
+        chosen = new_cfg.get("card_style") or styles.DEFAULT_PRESET
+        if chosen != previous and chosen != "custom":
+            _apply_card_style(chosen)
         _schedule_autosync()
         _redraw_toolbar()  # show/hide the toolbar link
 
@@ -595,6 +671,7 @@ def _open_settings() -> None:
         parent=mw,
         dark=theme_manager.night_mode,
         problems=problems,
+        preview=_web_preview,
     )
     _state["dialog"] = dialog
     try:

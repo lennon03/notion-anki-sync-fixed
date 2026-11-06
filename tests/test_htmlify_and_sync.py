@@ -401,10 +401,15 @@ def test_model_creation_leaves_backend_managed_id():
     )
 
 
-def test_existing_model_css_is_updated():
+def test_existing_model_css_is_left_alone():
+    """CSS is only written by a style preset, never by a sync."""
+
     class Models:
         def __init__(self):
             self.saved = []
+
+        def get(self, mid):
+            return None
 
         def by_name(self, name):
             return {"css": ".card { text-align: left; }"}
@@ -416,10 +421,13 @@ def test_existing_model_css_is_updated():
         def __init__(self):
             self.models = Models()
 
+        def get_config(self, key, default=None):
+            return default
+
     col = Collection()
     model = _get_or_create_model(col)
-    assert model["css"] == MODEL_CSS
-    assert col.models.saved == [model]
+    assert model["css"] == ".card { text-align: left; }"
+    assert col.models.saved == []
 
 
 def test_empty_cards_are_enabled_by_default():
@@ -1278,14 +1286,24 @@ def test_legacy_config_cache_is_removed(env):
     assert env.col.get_config("notionSync.rowState", None) is None
 
 
-def test_note_type_css_change_is_one_undo_step(env):
+def test_css_edited_in_anki_is_kept_and_noop_sync_adds_no_undo(env):
     env.sync()
     model = env.col.models.by_name("Notion Sync Card")
     model["css"] = ".card {}"
     env.col.models.save(model)
     env.col.add_custom_undo_entry("Previous action")
     env.sync()
-    assert env.col.undo_status().undo == "Notion Sync"
+    assert env.col.undo_status().undo == "Previous action"
+    assert env.col.models.by_name("Notion Sync Card")["css"] == ".card {}"
+
+
+def test_new_note_type_uses_the_chosen_style(env):
+    from notion_sync_addon.styles import PRESETS
+
+    env.cfg["card_style"] = "minimal"
+    env.sync()
+    model = env.col.models.by_name("Notion Sync Card")
+    assert model["css"] == PRESETS["minimal"]
 
 
 # --------------------------------------------------------------------- #

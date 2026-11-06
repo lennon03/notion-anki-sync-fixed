@@ -7,5 +7,6 @@
   "card_type_column": "Card type",
   "context_column": "Context",
   "sync_every_minutes": 0,
-  "sync_with_ankiweb": false
+  "sync_with_ankiweb": false,
+  "card_style": "classic"
 }
