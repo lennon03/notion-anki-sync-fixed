@@ -7,26 +7,29 @@ homepage = "https://github.com/9dogs/notion-anki-sync"
 authors = ["Mikhail Knyazev <hellishbot@gmail.com>"]
 license = "GPL-3.0-only"
 readme = "README.md"
+# an Anki add-on, not an installable package: Poetry only manages the tools
+package-mode = false
 
 [tool.poetry.dependencies]
-python = ">=3.9,<3.11"
-aqt = {extras = ["qt6"], version = "^2.1.61"}
+# the Python bundled with Anki 26.x
+python = ">=3.13,<3.14"
 
-[tool.poetry.dev-dependencies]
-black = "^23.3.0"
-isort = "^5.7.0"
-mypy = "^1.2.0"
-flake8 = "^6.0.0"
-pydocstyle = "^6.1.1"
-pytest = "^7.3.0"
-pytest-cov = "^4.0.0"
-darglint = "^1.8.0"
-types-requests = "^2.25.11"
+[tool.poetry.group.dev.dependencies]
+# the add-on runs inside Anki; tests use Anki's collection library and Qt
+anki = "26.9.3"
+pyqt6 = "6.11.0"  # what Anki 26.9.3 ships (6.12's stubs break mypy)
+black = "^26.10"
+isort = "^9.0"
+mypy = "^2.4"
+flake8 = "^7.3"
+pydocstyle = "^6.3"
+pytest = "^9.0"
+pytest-cov = "^7.1"
 
 [tool.black]
 line-length = 79
 skip-string-normalization = true
-target-version = ["py39"]
+target-version = ["py313"]
 
 [tool.isort]
 multi_line_output = 3
@@ -34,9 +37,10 @@ include_trailing_comma = true
 force_grid_wrap = 0
 use_parentheses = true
 default_section = "THIRDPARTY"
-known_first_party = "notion_anki_sync,tests"
+known_first_party = "notion_sync_addon,tests"
 
 [tool.mypy]
+python_version = "3.13"
 sqlite_cache = true
 ignore_missing_imports = true
 check_untyped_defs = true
@@ -50,6 +54,3 @@ strict_equality = true
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.scripts]
-sync = "notion_anki_sync.sync:main"
