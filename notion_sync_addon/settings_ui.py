@@ -139,10 +139,14 @@ QLabel#pageId {{ font-family: {MONO_STACK}; font-size: 11px; color: {p['MUTED_FO
 QLabel#pageName {{ font-size: 14px; font-weight: 500; }}
 QLabel#pageName[pending="true"] {{ color: {p['MUTED_FOREGROUND']}; font-weight: 400; }}
 QLabel#errorText {{ font-size: 12px; color: {p['DESTRUCTIVE_FOREGROUND']}; }}
+QLabel#problemItem {{ font-size: 12px; color: {p['FOREGROUND']}; }}
 QLabel#emptyText {{ font-size: 13px; color: {p['MUTED_FOREGROUND']}; }}
 
 QFrame#card {{
     background: {p['CARD']}; border: 1px solid {p['CARD_BORDER']}; border-radius: 12px;
+}}
+QFrame#warnCard {{
+    background: {p['CARD']}; border: 1px solid {p['INVALID_BORDER']}; border-radius: 12px;
 }}
 QFrame#row {{ background: transparent; border: 0; }}
 QFrame#row[divider="true"] {{ border-top: 1px solid {p['CARD_BORDER']}; border-radius: 0; }}
@@ -252,6 +256,8 @@ _ICONS = {
             '<path d="M16 17H8"/>',
     "external": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/>'
                 '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    "alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 '
+             '1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 }
 
 
@@ -534,6 +540,26 @@ class _NameSignals(QObject):
     resolved = pyqtSignal(str, str)
 
 
+# One long-lived emitter, created on the main thread and never freed: a
+# lookup thread that outlives its dialog only holds a reference to it, so
+# the QObject can't be destroyed on that thread. Each dialog connects to
+# it; Qt drops the connection when the dialog is deleted, so a late name
+# goes nowhere.
+_NAME_SIGNALS: List[_NameSignals] = []
+
+
+def _name_signals() -> _NameSignals:
+    """The shared emitter; call on the main thread."""
+    if _NAME_SIGNALS:
+        try:
+            _NAME_SIGNALS[0].objectName()
+            return _NAME_SIGNALS[0]
+        except RuntimeError:  # its QApplication is gone (tests, previews)
+            _NAME_SIGNALS.clear()
+    _NAME_SIGNALS.append(_NameSignals())
+    return _NAME_SIGNALS[0]
+
+
 class SettingsDialog(QDialog):
     """Notion Sync settings, laid out like a T3 Code settings panel.
 
@@ -543,12 +569,14 @@ class SettingsDialog(QDialog):
         lookup_name: (page_id, token) -> page title; called off the UI thread.
         on_save: receives the new config dict.
         on_sync: called after a successful "Sync now" save.
+        problems: what the last sync could not read, shown above the pages.
     """
 
     def __init__(self, cfg: dict, canonical_page_id: Callable[[str], str],
                  lookup_name: Callable[[str, str], str],
                  on_save: Callable[[dict], None], on_sync: Callable[[], None],
-                 parent: Optional[QWidget] = None, dark: bool = False) -> None:
+                 parent: Optional[QWidget] = None, dark: bool = False,
+                 problems: Optional[List[str]] = None) -> None:
         super().__init__(parent)
         use_theme(dark)
         self.setObjectName("notionSyncSettings")
@@ -566,10 +594,9 @@ class SettingsDialog(QDialog):
         self._lookup = lookup_name
         self._on_save = on_save
         self._on_sync = on_sync
-        # not parented to the dialog: a lookup thread may still emit after
-        # the dialog is deleted (Qt then drops the connection to it)
-        self._signals = _NameSignals()
+        self._signals = _name_signals()
         self._signals.resolved.connect(self._apply_name)
+        self._problems = list(problems or [])
         self._page_rows: dict = {}
 
         root = QVBoxLayout(self)
@@ -697,8 +724,45 @@ class SettingsDialog(QDialog):
         ))
         self._body.addWidget(card)
 
+    def _build_problems(self) -> None:
+        """Warning card: what the last sync couldn't read."""
+        card = Card()
+        card.setObjectName("warnCard")
+        row = QFrame()
+        row.setObjectName("row")
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(16, 13, 16, 14)
+        lay.setSpacing(12)
+        glyph = QLabel()
+        set_icon(glyph, "alert", "DESTRUCTIVE_FOREGROUND")
+        glyph.setContentsMargins(0, 2, 0, 0)
+        lay.addWidget(glyph, 0, Qt.AlignmentFlag.AlignTop)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        text.addWidget(label("The last sync couldn't read everything", "rowTitle"))
+        desc = label("Cards from these parts are kept as they are. Cards deleted there in "
+                     "Notion are removed once a sync can read them again.", "rowDesc")
+        desc.setWordWrap(True)
+        text.addWidget(desc)
+        text.addSpacing(4)
+        shown = self._problems[:6]
+        for problem in shown:
+            item = label(f"\u2022  {problem}", "problemItem")
+            item.setWordWrap(True)
+            item.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            text.addWidget(item)
+        if len(self._problems) > len(shown):
+            text.addWidget(label(f"... and {len(self._problems) - len(shown)} more", "rowDesc"))
+        lay.addLayout(text, 1)
+        card.add_row(row)
+        self._body.addWidget(card)
+        self._body.addSpacing(10)
+        self.problems_card = card
+
     def _build_pages(self, cfg: dict) -> None:
         self._page_count = self._section("Notion pages")
+        if self._problems:
+            self._build_problems()
         self.pages_card = Card()
 
         self._empty_row = setting_row("No pages yet", "Add a page below. Each page becomes a deck.")

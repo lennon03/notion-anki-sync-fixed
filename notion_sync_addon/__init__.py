@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from typing import Any, Callable, Dict, Optional
 
 from . import sync
@@ -54,7 +55,15 @@ _state: Dict[str, Any] = {
     "ankiweb_failed": False,
     # warnings of the last automatic sync: only new ones raise a tooltip
     "last_warnings": None,
+    # False when aqt.sync.handle_sync_error is missing: failed AnkiWeb syncs
+    # can't be told apart from successful ones
+    "probe": False,
+    # the _CloseGuard registered while a sync op uses the collection
+    "guard": None,
 }
+
+# name under which the close guard is registered with Anki's dialog manager
+CLOSE_GUARD_NAME = "NotionSyncWritingCards"
 
 
 def _config() -> dict:
@@ -115,6 +124,62 @@ def _op_finished(changes: Any) -> None:
     on_op_finished(mw, changes, None)
 
 
+class _CloseGuard:
+    """Makes Anki wait for a running sync op before it closes the collection.
+
+    Anki closes every window registered with its dialog manager before it
+    unloads the collection (closing the profile or Anki, a full sync) and
+    waits until each one has called back. While one of our ops uses the
+    collection, this stand-in is registered there: it calls back only when
+    the op has finished, so the collection is never closed under it.
+    """
+
+    def __init__(self) -> None:
+        self.callbacks: list = []
+
+    def closeWithCallback(self, callback: Callable[[], None]) -> None:  # noqa: N802
+        self.callbacks.append(callback)
+        tooltip("Notion Sync: finishing the import before closing...", period=3000)
+
+
+def _dialog_manager() -> Any:
+    try:
+        import aqt
+
+        return aqt.dialogs
+    except Exception:  # noqa: BLE001 - outside Anki
+        return None
+
+
+def _hold_collection() -> None:
+    """Keep Anki from closing the collection until _release_collection."""
+    if _state["guard"] is not None:
+        return
+    dialogs = _dialog_manager()
+    if dialogs is None or not hasattr(dialogs, "register_dialog"):
+        return  # older/newer aqt: an op cut short by closing just fails quietly
+    guard = _CloseGuard()
+    try:
+        dialogs.register_dialog(CLOSE_GUARD_NAME, _CloseGuard, guard)
+    except Exception:  # noqa: BLE001
+        return
+    _state["guard"] = guard
+
+
+def _release_collection() -> None:
+    guard = _state["guard"]
+    if guard is None:
+        return
+    _state["guard"] = None
+    dialogs = _dialog_manager()
+    try:
+        dialogs.markClosed(CLOSE_GUARD_NAME)
+    except Exception:  # noqa: BLE001
+        pass
+    for callback in guard.callbacks:  # Anki was waiting to close: go on
+        mw.taskman.run_on_main(callback)
+
+
 def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False) -> None:
     """Start a sync.
 
@@ -162,8 +227,11 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
         return _state["closing"] or mw.col is None or mw.pm.name != profile
 
     def failed(exc: Exception) -> None:
+        _release_collection()
         _finish(generation)
-        if manual:
+        if _state["closing"]:
+            print(f"Notion Sync failed while closing: {exc}", file=sys.stderr)
+        elif manual:
             showWarning(f"Notion Sync failed:\n{exc}")
         else:
             tooltip(f"Notion Sync failed: {exc}", period=6000)
@@ -186,12 +254,14 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
         return sync.prepare_sync(col, path, full)
 
     def prepared(prep: "sync.Prepared") -> None:
+        _release_collection()
         if aborted():
             _finish(generation)
             return
 
         def fetch(_col) -> "sync.SyncResult":
-            result = sync.fetch_pages(cfg, prep.known, progress, prep.structure, prep.previous)
+            result = sync.fetch_pages(cfg, prep.known, progress, prep.structure,
+                                      prep.previous, prep.sources)
             result.cache_path = path
             return result
 
@@ -210,27 +280,40 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
             stats.update(sync.apply_sync(col, result))
 
         def applied(_none: None) -> None:
-            _finish(generation)
-            if result.changes is not None:
-                _op_finished(result.changes)
-            _report(result, stats, manual)
-            changed = stats.get("added", 0) + stats.get("updated", 0) + stats.get("removed", 0)
-            if then_ankiweb and changed:
-                _upload_to_ankiweb()
+            try:
+                _finish(generation)
+                if result.changes is not None:
+                    _op_finished(result.changes)
+                _report(result, stats, manual)
+                changed = (stats.get("added", 0) + stats.get("updated", 0)
+                           + stats.get("removed", 0))
+                if then_ankiweb and changed:
+                    _upload_to_ankiweb()
+            finally:
+                _release_collection()
 
         def apply_failed(exc: Exception) -> None:
-            result.cleanup()
-            if result.changes is not None:  # partial changes still form one undo step
-                _op_finished(result.changes)
-            _finish(generation)
-            showWarning(f"Notion Sync failed while importing:\n{exc}")
+            try:
+                result.cleanup()
+                if result.changes is not None:  # partial changes still form one undo step
+                    _op_finished(result.changes)
+                _finish(generation)
+                if _state["closing"] or mw.col is None:
+                    # the next sync rewrites whatever was left half done
+                    print(f"Notion Sync import interrupted: {exc}", file=sys.stderr)
+                else:
+                    showWarning(f"Notion Sync failed while importing:\n{exc}")
+            finally:
+                _release_collection()
 
         # a QueryOp, not a CollectionOp: CollectionOp always shows Anki's
         # modal "Processing..." window; the undo step is made by apply_sync
+        _hold_collection()
         QueryOp(parent=mw, op=apply, success=guarded(applied)).failure(apply_failed) \
             .run_in_background()
 
     try:
+        _hold_collection()
         QueryOp(parent=mw, op=prepare, success=guarded(prepared)).failure(failed) \
             .run_in_background()
     except Exception as exc:  # noqa: BLE001
@@ -284,9 +367,18 @@ def _install_sync_error_probe() -> None:
     try:
         import aqt.sync as aqt_sync
     except ImportError:
-        return
+        aqt_sync = None
     original = getattr(aqt_sync, "handle_sync_error", None)
-    if original is None or getattr(original, "_notion_sync_probe", False):
+    if original is None:
+        # Notion is still pulled after every AnkiWeb sync; the upload that
+        # follows only happens once Anki's status check succeeds and asks
+        # for a normal sync (see _upload_to_ankiweb)
+        _state["probe"] = False
+        print("Notion Sync: aqt.sync.handle_sync_error not found, failed AnkiWeb "
+              "syncs can't be detected", file=sys.stderr)
+        return
+    _state["probe"] = True
+    if getattr(original, "_notion_sync_probe", False):
         return
 
     def probe(*args: Any, **kwargs: Any) -> Any:
@@ -323,14 +415,19 @@ def _upload_to_ankiweb() -> None:
     try:
         from aqt.sync import get_sync_status
     except ImportError:  # pragma: no cover
-        _start_followup_sync()
+        if _state["probe"]:
+            _start_followup_sync()
         return
 
     def on_status(status: Any) -> None:
+        # Anki calls back only when the status check worked (it swallows
+        # errors), so a failing AnkiWeb never gets a follow-up sync
         if status.required == status.FULL_SYNC:  # would ask upload/download
             tooltip("Notion Sync: AnkiWeb needs a full sync; press Sync to upload.",
                     period=6000)
             return
+        if status.required != getattr(status, "NORMAL_SYNC", 1):
+            return  # nothing to upload
         _start_followup_sync()
 
     get_sync_status(mw, on_status)
@@ -411,6 +508,10 @@ def _open_settings() -> None:
         _schedule_autosync()
         _redraw_toolbar()  # show/hide the toolbar link
 
+    try:
+        problems = sync.load_problems(sync.cache_path(ADDON_DIR, mw.pm.name))
+    except Exception:  # noqa: BLE001 - the dialog must open regardless
+        problems = []
     dialog = SettingsDialog(
         _config(),
         canonical_page_id=sync.canonical_page_id,
@@ -419,6 +520,7 @@ def _open_settings() -> None:
         on_sync=run_sync,
         parent=mw,
         dark=theme_manager.night_mode,
+        problems=problems,
     )
     _state["dialog"] = dialog
     try:

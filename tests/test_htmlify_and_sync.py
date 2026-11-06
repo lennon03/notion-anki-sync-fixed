@@ -278,8 +278,10 @@ def test_unchanged_requires_same_edit_time_full_minute_and_skew_margin():
     assert not is_unchanged(fresh, "2026-11-04T11:45:00.000Z", "k", now)
     assert not is_unchanged(None, EDITED, "k", now)
     assert not is_unchanged(fresh, "", "k", now)
-    # content that can change without bumping last_edited_time
-    assert not is_unchanged(RowState(EDITED, EDITED_TS + 600, volatile=True), EDITED, "k", now)
+    # content that can change without bumping last_edited_time: an hour
+    volatile = RowState(EDITED, EDITED_TS + 600, volatile=True)
+    assert is_unchanged(volatile, EDITED, "k", EDITED_TS + 600 + 3599)
+    assert not is_unchanged(volatile, EDITED, "k", EDITED_TS + 600 + 3600)
     # fetched "in the future": the clock was wrong then
     assert not is_unchanged(RowState(EDITED, now + 3600), EDITED, "k", now)
 
@@ -554,45 +556,68 @@ class FakeNotion:
     def __init__(self):
         self.pages = {}  # page id -> {"edited", "title", "tables": [db id]}
         self.tables = {}  # db id -> {"title", "rows": {row id: [title, edited, blocks]}}
-        self.fail = set()  # ("page"|"db"|"query"|"row", id)
+        self.fail = set()  # ("page"|"db"|"query"|"row", id): server error (503)
         self.media_fail = False
         self.downloads = []
+        self.calls = []  # every request: (kind, id)
+        self.ds = {}  # db id -> current data source id (default "ds-<db>")
+        self.trashed = {}  # row id -> db id: rows moved to Notion's trash
 
     def __call__(self, token):  # stands in for the NotionClient class
         return self
 
+    def _ds_of(self, db):
+        return self.ds.get(db, "ds-" + db)
+
     def get_page(self, pid):
+        self.calls.append(("page", pid))
         if ("page", pid) in self.fail:
-            raise NotionError(f"page {pid} failed")
-        page = self.pages[pid]
-        return {"last_edited_time": page["edited"],
-                "properties": {"t": {"type": "title", "title": [{"plain_text": page["title"]}]}}}
+            raise NotionError(f"page {pid} failed", 503, transient=True)
+        if pid in self.pages:
+            page = self.pages[pid]
+            return {"last_edited_time": page["edited"],
+                    "properties": {"t": {"type": "title",
+                                         "title": [{"plain_text": page["title"]}]}}}
+        for db, table in self.tables.items():
+            if pid in table["rows"]:
+                return {"id": pid, "in_trash": False, "parent": {"database_id": db}}
+        if pid in self.trashed:
+            return {"id": pid, "in_trash": True, "parent": {"database_id": self.trashed[pid]}}
+        raise NotionError("object_not_found", 404)
 
     def children(self, bid):
         if bid in self.pages:
+            self.calls.append(("blocks", bid))
             return [{"id": db, "type": "child_database",
                      "child_database": {"title": self.tables[db]["title"]}}
                     for db in self.pages[bid]["tables"]]
         for table in self.tables.values():
             if bid in table["rows"]:
                 if ("row", bid) in self.fail:
-                    raise NotionError("row failed")
+                    raise NotionError("row failed", 503, transient=True)
                 self.downloads.append(bid)
                 return table["rows"][bid][2]
         return []
 
     def get_database(self, db):
+        self.calls.append(("db", db))
         if ("db", db) in self.fail:
-            raise NotionError("GET database 503")
+            raise NotionError("GET database 503", 503, transient=True)
+        if db not in self.tables:
+            raise NotionError("object_not_found", 404)
         return {"title": [{"plain_text": self.tables[db]["title"]}],
-                "data_sources": [{"id": "ds-" + db}]}
+                "data_sources": [{"id": self._ds_of(db)}]}
 
     def query_data_source(self, ds):
-        db = ds[3:]
+        self.calls.append(("query", ds))
+        db = next((d for d in self.tables if self._ds_of(d) == ds), None)
+        if db is None:  # deleted or replaced data source
+            raise NotionError("object_not_found", 404)
         if ("query", db) in self.fail:
-            raise NotionError("query 503")
+            raise NotionError("query 503", 503, transient=True)
         return [{"id": rid, "last_edited_time": r[1], "url": "",
-                 "properties": {"Name": {"type": "title", "title": [{"plain_text": r[0]}]}}}
+                 "properties": {"Name": {"type": "title", "title": r[3] if len(r) > 3
+                                         else [{"plain_text": r[0]}]}}}
                 for rid, r in self.tables[db]["rows"].items()]
 
     def download_file(self, url):
@@ -606,7 +631,8 @@ DB1, DB2, DB3 = "d1" + "0" * 30, "d2" + "0" * 30, "d3" + "0" * 30
 
 
 def _rid(n):
-    return f"r{n:03d}".ljust(32, "0")
+    """A Notion row id: 32 lowercase hex digits."""
+    return f"f{n:03d}".ljust(32, "0")
 
 
 @pytest.fixture
@@ -639,7 +665,8 @@ def env(tmp_path, monkeypatch):
 
     def run(full=False, between=None):
         prep = sync_mod.prepare_sync(col, path, full)
-        result = sync_mod.fetch_pages(e.cfg, prep.known, None, prep.structure, prep.previous)
+        result = sync_mod.fetch_pages(e.cfg, prep.known, None, prep.structure, prep.previous,
+                                      prep.sources)
         result.cache_path = path
         if between:
             between()
@@ -836,12 +863,16 @@ def test_media_from_an_earlier_sync_is_reused_when_download_fails(env):
     assert env.note(_rid(0))["Back"] == back
 
 
-def test_synced_block_copies_are_always_downloaded(env):
+def test_synced_block_copies_are_rechecked_hourly(env, monkeypatch):
     synced = {"id": "sb", "type": "synced_block", "has_children": True,
               "synced_block": {"synced_from": {"block_id": "elsewhere"}}}
     env.notion.tables[DB1]["rows"][_rid(0)][2] = [_para("x"), synced]
     env.sync()
     env.notion.downloads.clear()
+    env.sync()
+    assert env.notion.downloads == []  # a no-op right after: nothing downloaded
+    real = env.sync_mod.time.time
+    monkeypatch.setattr(env.sync_mod.time, "time", lambda: real() + 3601)
     env.sync()
     assert env.notion.downloads == [_rid(0)]
 
@@ -1087,3 +1118,429 @@ def test_sync_error_probe_flags_failure(monkeypatch):
     addon_mod._install_sync_error_probe()  # idempotent
     fake.handle_sync_error(None, "network down")
     assert calls == ["network down"] and addon_mod._state["ankiweb_failed"]
+
+
+# --------------------------------------------------------------------- #
+# Second review of PR #1
+# --------------------------------------------------------------------- #
+
+
+def _image(block_id, name):
+    return {"id": block_id, "type": "image", "has_children": False,
+            "image": {"type": "file", "caption": [],
+                      "file": {"url": f"https://s3/x/{block_id}/{name}?sig=1"}}}
+
+
+def _mention(label="Other page", kind="page"):
+    return {"type": "mention", "plain_text": label, "annotations": {},
+            "mention": {"type": kind, kind: {"id": "z", "url": "https://notion.so/z"}}}
+
+
+def test_media_file_names_are_lowercase():
+    """N1: Anki on Windows stores the first copy lowercased."""
+    media = MediaCollector()
+    out = render_blocks([_image("AbCd" + "0" * 28, "Screen%20Shot.PNG")], media, FakeTree())
+    (fname,) = media.files
+    assert fname == fname.lower() and fname.startswith("ns-abcd") and fname.endswith(".png")
+    assert f"@@NSMEDIA:{fname}@@" in out
+
+
+def test_full_resync_of_identical_content_changes_nothing(env):
+    """N1: a re-download must produce exactly the stored HTML (media names
+    included), on every platform: 0 updates, no undo step."""
+    env.notion.tables[DB1]["rows"][_rid(0)][2] = [
+        _para("Café <b> & x"), _image("1a2b" + "0" * 28, "Screen%20Shot.png")]
+    env.notion.tables[DB1]["rows"][_rid(1)][2] = [_image("3c4d" + "0" * 28, "photo")]
+    env.sync()
+    back = env.note(_rid(0))["Back"]
+    assert 'src="ns-1a2b' in back and "screen_20shot.png" in back
+    env.col.add_custom_undo_entry("Previous action")
+    stats = env.sync(full=True)
+    assert stats["updated"] == 0 and stats["added"] == 0 and stats["removed"] == 0
+    assert env.col.undo_status().undo == "Previous action"
+    assert env.note(_rid(0))["Back"] == back
+
+
+def test_cache_of_another_render_version_keeps_row_origins(tmp_path):
+    """N1: the RENDER_VERSION bump re-renders every row but keeps origins,
+    so removal stays scoped during that first sync."""
+    import json
+
+    from notion_sync_addon.sync import RENDER_VERSION, load_cache
+
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps({
+        "v": RENDER_VERSION - 1,
+        "rows": {"r": [EDITED, EDITED_TS, "fp", "p", "d", 0]},
+        "pages": {"p": [EDITED, EDITED_TS, [["d", "Defs"]]]}, "dbs": {"d": "ds"}}))
+    cache = load_cache(str(path))
+    assert cache.rows["r"] == RowState("", 0.0, "", "p", "d")  # never trusted
+    assert cache.pages and cache.dbs == {"d": "ds"} and cache.raw == ""
+
+
+def test_replaced_data_source_is_looked_up_again(env):
+    """N2: a remembered data source id that Notion rejects is resolved again."""
+    env.sync()
+    env.notion.ds[DB1] = "ds-new-" + DB1  # the old one now answers 404
+    env.notion.tables[DB1]["rows"][_rid(5)] = ["h5", OLD, [_para("new row")]]
+    env.notion.calls.clear()
+    stats = env.sync()
+    assert not env.result.incomplete and stats["added"] == 1
+    assert ("db", DB1) in env.notion.calls
+    assert env.sync_mod.load_cache(env.path).dbs[DB1] == "ds-new-" + DB1
+    env.notion.calls.clear()
+    env.sync()
+    assert ("db", DB1) not in env.notion.calls  # cached again
+
+
+def test_deleted_database_fails_its_table_only(env):
+    """N2: when the lookup fails too, the table is failed (scoped) and the
+    stale id is forgotten, so later syncs don't query it first."""
+    env.sync()
+    del env.notion.tables[DB3]
+    env.notion.pages[P2]["tables"] = [DB2, DB3]
+    del env.notion.tables[DB1]["rows"][_rid(0)]
+    stats = env.sync()
+    assert env.result.incomplete and DB3 in env.result.failed_dbs
+    assert stats["removed"] == 1 and env.count() == 7  # DB3's cards are kept
+    assert DB3 not in env.sync_mod.load_cache(env.path).dbs
+
+
+def test_transient_query_error_does_not_look_up_the_database(env):
+    env.sync()
+    env.notion.fail = {("query", DB2)}
+    env.notion.calls.clear()
+    env.sync()
+    assert ("db", DB2) not in env.notion.calls
+    assert DB2 in env.sync_mod.load_cache(env.path).dbs
+
+
+def test_mentions_anywhere_make_a_row_volatile():
+    """N3: mentions in table cells, captions and the row title are found."""
+    from notion_sync_addon.sync import _has_live_mention, _is_volatile
+
+    cell_row = {"type": "table_row", "table_row": {"cells": [_rt("a"), [_mention()]]}}
+    assert _is_volatile(cell_row)
+    caption = _image("i" * 32, "a.png")
+    caption["image"]["caption"] = [_mention(kind="database")]
+    assert _is_volatile(caption)
+    assert _is_volatile({"type": "callout", "callout": {"rich_text": [_mention(kind="user")]}})
+    assert not _is_volatile({"type": "paragraph", "paragraph": {"rich_text": [
+        _mention(kind="date")]}})
+    assert not _is_volatile({"type": "table_row", "table_row": {"cells": [_rt("a")]}})
+    assert _has_live_mention([_mention()]) and not _has_live_mention(_rt("x"))
+
+
+def test_rows_with_mentions_are_rechecked_hourly_not_every_sync(env, monkeypatch):
+    """N3: a no-op sync right after a (full) sync downloads no row content."""
+    table = {"id": "tb", "type": "table", "has_children": True,
+             "table": {"has_column_header": False}}
+    env.notion.tables[DB1]["rows"][_rid(0)][2] = [table]  # mention in a cell
+    # mention in the row title
+    env.notion.tables[DB1]["rows"][_rid(1)].append([{"plain_text": "see "}, _mention()])
+    real_children = env.notion.children
+
+    def children(bid):
+        if bid == "tb":
+            return [{"id": "tr", "type": "table_row",
+                     "table_row": {"cells": [[_mention()]]}}]
+        return real_children(bid)
+
+    monkeypatch.setattr(env.notion, "children", children)
+    env.sync(full=True)
+    state = env.sync_mod.load_cache(env.path).rows
+    assert state[_rid(0)].volatile and state[_rid(1)].volatile
+    assert not state[_rid(2)].volatile
+    env.notion.downloads.clear()
+    assert env.sync()["unchanged"] == 8 and env.notion.downloads == []
+    real = env.sync_mod.time.time
+    monkeypatch.setattr(env.sync_mod.time, "time", lambda: real() + 3601)
+    env.sync()
+    assert sorted(env.notion.downloads) == [_rid(0), _rid(1)]
+
+
+def test_invalid_page_entry_does_not_block_removal(env):
+    """N4a: a mistyped entry is a config warning; deletions elsewhere go on."""
+    env.sync()
+    env.cfg["notion_pages"] = [P1, P2, "not a page"]
+    del env.notion.tables[DB1]["rows"][_rid(0)]
+    stats = env.sync()
+    assert stats["removed"] == 1 and not env.result.incomplete
+    assert any("'not a page'" in w for w in env.result.warnings)
+    assert any("'not a page'" in p for p in env.sync_mod.load_cache(env.path).problems)
+
+
+def test_page_mangled_into_an_invalid_entry_keeps_its_cards(env):
+    """N4a: P2's link edited into garbage: its cards may be that page's, keep
+    them; a valid page removed from the config still loses its cards."""
+    env.sync()
+    env.cfg["notion_pages"] = [P1, "https://www.notion.so/oops-" + P2[:20]]
+    stats = env.sync()
+    assert stats["removed"] == 0 and env.count() == 8
+    env.cfg["notion_pages"] = [P1]
+    assert env.sync()["removed"] == 5 and env.count() == 3
+
+
+def test_unlisted_notes_of_unknown_origin_are_looked_up(env):
+    """N4b: cache lost and a table failing: a row Notion has in the trash is
+    removed, a row that still exists (in the failing table) is kept."""
+    env.sync()
+    os.remove(env.path)
+    env.notion.fail = {("query", DB3)}
+    env.notion.trashed[_rid(0)] = DB1
+    del env.notion.tables[DB1]["rows"][_rid(0)]
+    env.notion.calls.clear()
+    stats = env.sync()
+    assert env.result.incomplete and stats["removed"] == 1
+    assert env.note(_rid(0)) is None and env.note(_rid(20)) is not None
+    looked_up = [c for c in env.notion.calls if c[0] == "page" and c[1] not in (P1, P2)]
+    assert sorted(c[1] for c in looked_up) == [_rid(0), _rid(20), _rid(21)]
+    # origins learned for the kept rows: not asked again
+    rows = env.sync_mod.load_cache(env.path).rows
+    assert (rows[_rid(20)].page_id, rows[_rid(20)].db_id) == (P2, DB3)
+    env.notion.calls.clear()
+    env.sync()
+    assert all(c[1] in (P1, P2) for c in env.notion.calls if c[0] == "page")
+
+
+def test_unknown_origin_lookup_error_keeps_the_note(env):
+    env.sync()
+    os.remove(env.path)
+    env.notion.fail = {("query", DB3)}
+    del env.notion.tables[DB1]["rows"][_rid(0)]  # 404 (maybe just not shared)
+    assert env.sync()["removed"] == 0 and env.note(_rid(0)) is not None
+
+
+def test_failures_are_kept_in_the_cache_until_a_clean_sync(env):
+    """N4c: the settings dialog reads the last sync's problems."""
+    env.sync()
+    env.notion.fail = {("query", DB2)}
+    env.sync()
+    problems = env.sync_mod.load_problems(env.path)
+    assert len(problems) == 1 and "Notions" in problems[0] and "Philo" in problems[0]
+    env.notion.fail = set()
+    env.sync()
+    assert env.sync_mod.load_problems(env.path) == []
+
+
+def test_cache_write_failure_is_only_a_warning(env, monkeypatch):
+    """N5: os.replace denied (antivirus, OneDrive): notes written, warned."""
+    calls = []
+
+    def deny(src, dst):
+        calls.append(dst)
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(env.sync_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(env.sync_mod.os, "replace", deny)
+    stats = env.sync()
+    assert stats["added"] == 8 and env.count() == 8 and len(calls) == 2
+    assert any("cache" in w for w in env.result.warnings)
+    assert not [f for f in os.listdir(os.path.dirname(env.path)) if f.endswith(".tmp")]
+
+
+def test_cache_write_is_retried_once(env, monkeypatch):
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise PermissionError(13, "Access is denied")
+        return real(src, dst)
+
+    monkeypatch.setattr(env.sync_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(env.sync_mod.os, "replace", flaky)
+    env.sync()
+    assert len(calls) == 2 and not env.result.warnings
+    assert os.path.exists(env.path)
+
+
+def test_same_row_twice_in_one_sync_makes_one_note(env):
+    """N7: a page listed twice, or a row listed by two tables."""
+    env.cfg["notion_pages"] = [P1, P2, P1, "https://www.notion.so/Hist-" + P1]
+    env.notion.tables[DB3]["rows"][_rid(0)] = list(env.notion.tables[DB1]["rows"][_rid(0)])
+    stats = env.sync()
+    assert stats["added"] == 8 and env.count() == 8
+    assert len(env.col.find_notes(f"Source:{_rid(0)}")) == 1
+    assert env.result.page_ids == [P1, P2]
+
+
+def test_hand_made_note_with_any_source_is_never_touched(env):
+    """N8: only a Notion row id in Source marks a synced note."""
+    from anki.notes import Note
+
+    env.sync()
+    model = env.col.models.by_name("Notion Sync Card")
+    did = env.note(_rid(0)).cards()[0].did
+    mine = []
+    for source in ("Book p. 12", "F" * 32, "abc", _rid(0)[:31]):
+        note = Note(env.col, model)
+        note["Front"], note["Back"], note["Source"] = "mine", "by hand", source
+        env.col.add_note(note, did)
+        mine.append(note.id)
+    stats = env.sync()
+    assert stats["removed"] == 0 and stats["unchanged"] == 8
+    assert all(env.col.get_note(nid)["Back"] == "by hand" for nid in mine)
+    assert set(env.sync_mod.synced_notes(env.col)) == set(env.sync_mod.load_cache(env.path).rows)
+
+
+# --------------------------------------------------------------------- #
+# Add-on wiring: closing while the cards are written, AnkiWeb probe
+# --------------------------------------------------------------------- #
+
+
+class _Dialogs:
+    """aqt.dialogs stand-in: closeAll waits for every registered instance."""
+
+    def __init__(self):
+        self.entries = {}
+
+    def register_dialog(self, name, creator, instance=None):
+        self.entries[name] = [creator, instance]
+
+    def markClosed(self, name):
+        self.entries[name] = [self.entries[name][0], None]
+
+    def closeAll(self, onsuccess):
+        for creator, instance in list(self.entries.values()):
+            if instance is not None:
+                instance.closeWithCallback(
+                    lambda: all(i is None for _, i in self.entries.values()) and onsuccess())
+                return
+        onsuccess()
+
+
+def test_closing_anki_waits_for_the_import(addon, env, monkeypatch):
+    """N9: Anki unloads the collection only after the running apply ends."""
+    dialogs = _Dialogs()
+    monkeypatch.setattr(addon.mod, "_dialog_manager", lambda: dialogs)
+    monkeypatch.setitem(addon.mod._state, "guard", None)
+    events = []
+    real_apply = env.sync_mod.apply_sync
+
+    def apply_while_closing(col, result):
+        dialogs.closeAll(lambda: events.append("collection closed"))  # user quits
+        events.append("closing requested")
+        stats = real_apply(col, result)
+        events.append("cards written")
+        return stats
+
+    monkeypatch.setattr(env.sync_mod, "apply_sync", apply_while_closing)
+    addon.mod.run_sync(manual=False)
+    assert events == ["closing requested", "cards written", "collection closed"]
+    assert addon.mod._state["guard"] is None and env.count() == 8
+    dialogs.closeAll(lambda: events.append("closed again"))  # nothing held now
+    assert events[-1] == "closed again"
+
+
+def test_import_failure_while_closing_is_quiet(addon, env, monkeypatch):
+    def boom(col, result):
+        addon.mod._state["closing"] = True
+        raise RuntimeError("collection closed")
+
+    monkeypatch.setattr(env.sync_mod, "apply_sync", boom)
+    addon.mod.run_sync(manual=True)
+    assert not any("failed" in m for m in addon.shown)
+    assert not addon.mod._state["busy"]
+
+
+def test_missing_sync_error_hook_never_uploads_after_a_failed_status(addon, env, monkeypatch):
+    """Nit: without aqt.sync.handle_sync_error Notion still syncs, but the
+    follow-up upload needs Anki's status check to ask for a normal sync."""
+    import sys
+    import types
+
+    fake = types.ModuleType("aqt.sync")
+    statuses = []
+
+    class Status:
+        NO_CHANGES, NORMAL_SYNC, FULL_SYNC = 0, 1, 2
+
+        def __init__(self, required):
+            self.required = required
+
+    fake.get_sync_status = lambda mw, cb: [cb(Status(s)) for s in statuses]
+    pkg = types.ModuleType("aqt")
+    pkg.sync = fake
+    monkeypatch.setitem(sys.modules, "aqt", pkg)
+    monkeypatch.setitem(sys.modules, "aqt.sync", fake)
+    addon.mod._install_sync_error_probe()
+    assert addon.mod._state["probe"] is False
+    env.cfg["sync_with_ankiweb"] = True
+    statuses[:] = []  # status check failed: Anki never calls back
+    addon.mod._on_ankiweb_sync_will_start()
+    addon.mod._on_ankiweb_sync_finished()
+    assert env.count() == 8 and addon.mw.sync_clicks == 0
+    statuses[:] = [Status.NO_CHANGES]
+    addon.mod._upload_to_ankiweb()
+    assert addon.mw.sync_clicks == 0
+    statuses[:] = [Status.NORMAL_SYNC]
+    addon.mod._upload_to_ankiweb()
+    assert addon.mw.sync_clicks == 1
+
+
+# --------------------------------------------------------------------- #
+# Settings dialog (Qt, offscreen)
+# --------------------------------------------------------------------- #
+
+
+_QAPP = []  # like Anki's, the test QApplication lives until the end
+
+
+@pytest.fixture
+def qapp():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    widgets = pytest.importorskip("PyQt6.QtWidgets")
+    if not _QAPP:
+        _QAPP.append(widgets.QApplication.instance() or widgets.QApplication([]))
+    return _QAPP[0]
+
+
+def _dialog(problems=None):
+    from notion_sync_addon.settings_ui import SettingsDialog
+
+    cfg = {"notion_token": "t", "notion_pages": [P1, "garbage"]}
+    return SettingsDialog(cfg, canonical_page_id, lambda pid, token: "Hist",
+                          lambda c: None, lambda: None, problems=problems)
+
+
+def test_settings_dialog_shows_the_last_sync_problems(qapp):
+    from PyQt6.QtWidgets import QLabel
+
+    dialog = _dialog(["Table 'Defs' on 'Hist': network error"])
+    texts = [w.text() for w in dialog.problems_card.findChildren(QLabel)]
+    assert any("Defs" in t for t in texts)
+    assert not hasattr(_dialog(), "problems_card")
+
+
+def test_page_name_arriving_after_the_dialog_is_gone_is_safe(qapp):
+    from notion_sync_addon import settings_ui
+
+    dialog = _dialog()
+    signals = settings_ui._name_signals()
+    assert dialog._signals is signals  # one emitter, owned by the module
+    dialog.deleteLater()
+    del dialog
+    qapp.processEvents()
+    import gc
+
+    gc.collect()
+    signals.resolved.emit(P1, "late name")  # no receiver left: nothing happens
+    qapp.processEvents()
+
+
+def test_changed_media_under_the_same_name_is_imported(env):
+    """N6: identical files skip Anki's import; a changed file still goes in."""
+    image = _image("1a2b" + "0" * 28, "pic.png")
+    env.notion.tables[DB1]["rows"][_rid(0)][2] = [image]
+    env.sync()
+    first = env.note(_rid(0))["Back"]
+    image["image"]["file"]["url"] = image["image"]["file"]["url"].replace("sig=1", "sig=2")
+    env.notion.tables[DB1]["rows"][_rid(0)][1] = "2026-01-05T00:00:00.000Z"
+    assert env.sync()["updated"] == 1
+    second = env.note(_rid(0))["Back"]
+    assert second != first
+    for back in (first, second):
+        name = back.split('src="')[1].split('"')[0]
+        assert os.path.exists(os.path.join(env.col.media.dir(), name))

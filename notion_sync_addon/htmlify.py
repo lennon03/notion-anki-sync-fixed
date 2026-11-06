@@ -52,7 +52,14 @@ class MediaCollector:
 
 
 def _file_safe(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.\-]+", "_", name)[:120] or "media"
+    """A media file name Anki stores unchanged on every platform.
+
+    Lowercase only: on Windows Anki stores the first copy of a file under a
+    lowercased name but returns the name as given when the same file is
+    added again, so a mixed-case name would flip between syncs (and not
+    match the stored file on case-sensitive AnkiDroid/iOS).
+    """
+    return re.sub(r"[^a-z0-9_.\-]+", "_", name.lower())[:120] or "media"
 
 
 def _esc(text: str) -> str:
@@ -228,7 +235,6 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
         return f"<details><summary>{text}</summary>{children_html}</details>"
     if btype == "code":
         content = _plain(body.get("rich_text") or [])
-        lang = html.escape(body.get("language", "plain text"), quote=True)
         return (
             f'<pre class="ns-code" style="{_CODE_BLOCK_STYLE}">'
             f'<code>{html.escape(content)}</code></pre>'

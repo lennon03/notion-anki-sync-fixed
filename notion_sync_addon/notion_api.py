@@ -28,7 +28,35 @@ REQUEST_TIMEOUT_SECONDS = 60
 
 
 class NotionError(Exception):
-    """Raised when Notion returns a permanent error."""
+    """Raised when a Notion request fails.
+
+    ``status`` is the HTTP status (None for network errors). ``transient``
+    is True for failures that say nothing about the object itself (network
+    errors, rate limits and server errors that outlasted the retries): only
+    a non-transient error means Notion rejected the request as such.
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None,
+                 transient: bool = False) -> None:
+        super().__init__(message)
+        self.status = status
+        self.transient = transient
+
+    def reason(self) -> str:
+        """A short, user-facing explanation of the failure."""
+        if self.status in (401,):
+            return "the token was rejected (401)"
+        if self.status in (403, 404):
+            return f"not found or not shared with the integration ({self.status})"
+        if self.status == 429:
+            return "rate limited by Notion (429)"
+        if self.status is not None and self.status >= 500:
+            return f"Notion server error ({self.status})"
+        if self.status is not None:
+            return f"Notion rejected the request ({self.status})"
+        if self.transient:
+            return "network error"
+        return str(self)
 
 
 class NotionClient:
@@ -81,21 +109,24 @@ class NotionClient:
                 # stale keep-alive socket or network blip: reconnect and retry
                 self._drop_connection()
                 if attempt > MAX_RETRIES:
-                    raise NotionError(f"Network error calling Notion for {path}: {e}") from e
+                    raise NotionError(f"Network error calling Notion for {path}: {e}",
+                                      transient=True) from e
                 time.sleep(RETRY_BACKOFF_SECONDS * (attempt - 1))
                 continue
             if status < 400:
                 try:
                     return json.loads(payload.decode("utf-8"))
                 except ValueError as e:  # truncated or non-JSON body
-                    raise NotionError(f"Invalid response from Notion for {path}: {e}") from e
+                    raise NotionError(f"Invalid response from Notion for {path}: {e}",
+                                      status, transient=True) from e
             if status == 429 or status >= 500:
                 if attempt > MAX_RETRIES:
-                    raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}")
+                    raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}",
+                                      status, transient=True)
                 delay = retry_delay(retry_after, RETRY_BACKOFF_SECONDS * attempt)
                 time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
                 continue
-            raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}")
+            raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}", status)
 
     def _iterate(self, results: List[dict], has_more: bool) -> List[dict]:
         return list(results)
