@@ -9,8 +9,8 @@ from notion_sync_addon.sync import (
     MODEL_CSS,
     RowState,
     SyncResult,
-    _get_or_create_model,
     _fetch_table,
+    _get_or_create_model,
     canonical_page_id,
     deck_safe,
     is_unchanged,
@@ -34,32 +34,84 @@ def _children(b):
 
 def test_inline_rich_text_annotations():
     payload = [
-        {"type": "text", "plain_text": "Hello", "text": {"content": "Hello", "link": None},
-         "annotations": {"bold": True, "italic": True, "strikethrough": False,
-                         "underline": True, "code": False, "color": "default"}},
-        {"type": "equation", "plain_text": "1+1", "equation": {"expression": "F=ma"}},
-        {"type": "text", "plain_text": "x", "text": {"content": "x", "link": {"url": "https://example.com"}},
-         "annotations": {"bold": False, "italic": False, "strikethrough": False,
-                         "underline": False, "code": False, "color": "default"}},
+        {
+            "type": "text",
+            "plain_text": "Hello",
+            "text": {"content": "Hello", "link": None},
+            "annotations": {
+                "bold": True,
+                "italic": True,
+                "strikethrough": False,
+                "underline": True,
+                "code": False,
+                "color": "default",
+            },
+        },
+        {
+            "type": "equation",
+            "plain_text": "1+1",
+            "equation": {"expression": "F=ma"},
+        },
+        {
+            "type": "text",
+            "plain_text": "x",
+            "text": {"content": "x", "link": {"url": "https://example.com"}},
+            "annotations": {
+                "bold": False,
+                "italic": False,
+                "strikethrough": False,
+                "underline": False,
+                "code": False,
+                "color": "default",
+            },
+        },
     ]
-    out = render_blocks([{
-        "type": "paragraph", "has_children": False,
-        "paragraph": {"rich_text": payload}, "id": "b1",
-    }], MediaCollector(), FakeTree())
+    out = render_blocks(
+        [
+            {
+                "type": "paragraph",
+                "has_children": False,
+                "paragraph": {"rich_text": payload},
+                "id": "b1",
+            }
+        ],
+        MediaCollector(),
+        FakeTree(),
+    )
     assert "<u><em><b>Hello</b></em></u>" in out
     assert "\\(F=ma\\)" in out
     assert '<a href="https://example.com">x</a>' in out
 
 
 def test_code_block_and_math_block():
-    out = render_blocks([
-        {"type": "code", "has_children": False, "id": "c1",
-         "code": {"rich_text": [{"type": "text", "plain_text": "def f():\n  return <tag>",
-                                 "text": {"content": "def f():\n  return <tag>"},
-                                 "annotations": {}}], "language": "python"}},
-        {"type": "equation", "has_children": False, "id": "e1",
-         "equation": {"expression": "e^{i\\pi}+1=0"}},
-    ], MediaCollector(), FakeTree())
+    out = render_blocks(
+        [
+            {
+                "type": "code",
+                "has_children": False,
+                "id": "c1",
+                "code": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "plain_text": "def f():\n  return <tag>",
+                            "text": {"content": "def f():\n  return <tag>"},
+                            "annotations": {},
+                        }
+                    ],
+                    "language": "python",
+                },
+            },
+            {
+                "type": "equation",
+                "has_children": False,
+                "id": "e1",
+                "equation": {"expression": "e^{i\\pi}+1=0"},
+            },
+        ],
+        MediaCollector(),
+        FakeTree(),
+    )
     assert '<pre class="ns-code" style="' in out
     assert "background:#f6f7f8" in out
     assert "<code>def f():\n  return &lt;tag&gt;</code></pre>" in out
@@ -68,37 +120,129 @@ def test_code_block_and_math_block():
 
 def test_toggle_and_nested_lists():
     blocks = [
-        {"type": "toggle", "has_children": True, "id": "t1",
-         "toggle": {"rich_text": [{"type": "text", "plain_text": "Q", "text": {"content": "Q"}, "annotations": {}}]}},
-        {"type": "numbered_list_item", "has_children": False, "id": "l1",
-         "numbered_list_item": {"rich_text": [{"type": "text", "plain_text": "one", "text": {"content": "one"}, "annotations": {}}]}},
-        {"type": "bulleted_list_item", "has_children": True, "id": "l2",
-         "bulleted_list_item": {"rich_text": [{"type": "text", "plain_text": "outer", "text": {"content": "outer"}, "annotations": {}}]}},
+        {
+            "type": "toggle",
+            "has_children": True,
+            "id": "t1",
+            "toggle": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "plain_text": "Q",
+                        "text": {"content": "Q"},
+                        "annotations": {},
+                    }
+                ]
+            },
+        },
+        {
+            "type": "numbered_list_item",
+            "has_children": False,
+            "id": "l1",
+            "numbered_list_item": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "plain_text": "one",
+                        "text": {"content": "one"},
+                        "annotations": {},
+                    }
+                ]
+            },
+        },
+        {
+            "type": "bulleted_list_item",
+            "has_children": True,
+            "id": "l2",
+            "bulleted_list_item": {
+                "rich_text": [
+                    {
+                        "type": "text",
+                        "plain_text": "outer",
+                        "text": {"content": "outer"},
+                        "annotations": {},
+                    }
+                ]
+            },
+        },
     ]
-    tree = FakeTree({"t1": [
-        {"type": "paragraph", "id": "p2", "has_children": False,
-         "paragraph": {"rich_text": [{"type": "text", "plain_text": "A", "text": {"content": "A"}, "annotations": {}}]}}
-    ], "l2": [
-        {"type": "bulleted_list_item", "id": "l3", "has_children": False,
-         "bulleted_list_item": {"rich_text": [{"type": "text", "plain_text": "inner", "text": {"content": "inner"}, "annotations": {}}]}},
-    ]})
+    tree = FakeTree(
+        {
+            "t1": [
+                {
+                    "type": "paragraph",
+                    "id": "p2",
+                    "has_children": False,
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "plain_text": "A",
+                                "text": {"content": "A"},
+                                "annotations": {},
+                            }
+                        ]
+                    },
+                }
+            ],
+            "l2": [
+                {
+                    "type": "bulleted_list_item",
+                    "id": "l3",
+                    "has_children": False,
+                    "bulleted_list_item": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "plain_text": "inner",
+                                "text": {"content": "inner"},
+                                "annotations": {},
+                            }
+                        ]
+                    },
+                },
+            ],
+        }
+    )
     out = render_blocks(blocks, MediaCollector(), tree)
-    assert "<details><summary>Q</summary>" in out and "<p>A</p></details>" in out
+    assert (
+        "<details><summary>Q</summary>" in out and "<p>A</p></details>" in out
+    )
     assert "<ol><li>one</li></ol>" in out
     assert "<li>outer<ul><li>inner</li></ul></li>" in out
 
 
 def test_table_rendering():
-    blocks = [{
-        "type": "table", "id": "tab", "has_children": True,
-        "table": {"table_width": 2, "has_column_header": True, "has_row_header": False},
-    }]
-    tree = FakeTree({"tab": [
-        {"type": "table_row", "id": "r1", "has_children": False,
-         "table_row": {"cells": [_rt("A"), _rt("B")]}},
-        {"type": "table_row", "id": "r2", "has_children": False,
-         "table_row": {"cells": [_rt("1"), _rt("2")]}},
-    ]})
+    blocks = [
+        {
+            "type": "table",
+            "id": "tab",
+            "has_children": True,
+            "table": {
+                "table_width": 2,
+                "has_column_header": True,
+                "has_row_header": False,
+            },
+        }
+    ]
+    tree = FakeTree(
+        {
+            "tab": [
+                {
+                    "type": "table_row",
+                    "id": "r1",
+                    "has_children": False,
+                    "table_row": {"cells": [_rt("A"), _rt("B")]},
+                },
+                {
+                    "type": "table_row",
+                    "id": "r2",
+                    "has_children": False,
+                    "table_row": {"cells": [_rt("1"), _rt("2")]},
+                },
+            ]
+        }
+    )
     out = render_blocks(blocks, MediaCollector(), tree)
     assert "<thead>" in out
     assert "<th style=" in out and ">A</th><th style=" in out
@@ -109,10 +253,21 @@ def test_table_rendering():
 
 def test_image_file_becomes_media_placeholder():
     media = MediaCollector()
-    blocks = [{
-        "type": "image", "id": "1c4c" + "x" * 28, "has_children": False,
-        "image": {"type": "file", "file": {"url": "https://s3.example.com/abc.png?ttl=1", "expiry_time": ""}, "caption": []},
-    }]
+    blocks = [
+        {
+            "type": "image",
+            "id": "1c4c" + "x" * 28,
+            "has_children": False,
+            "image": {
+                "type": "file",
+                "file": {
+                    "url": "https://s3.example.com/abc.png?ttl=1",
+                    "expiry_time": "",
+                },
+                "caption": [],
+            },
+        }
+    ]
     out = render_blocks(blocks, media, FakeTree())
     assert "<img src=\"@@NSMEDIA:" in out
     assert len(media.files) == 1
@@ -123,24 +278,48 @@ def test_image_file_becomes_media_placeholder():
 def test_media_resolve():
     media = MediaCollector()
     ph = media.add("https://x/y.png", "img1.png")
-    html = MediaCollector.resolve(f'<img src="{ph}">', {"img1.png": "img1.png"})
+    html = MediaCollector.resolve(
+        f'<img src="{ph}">', {"img1.png": "img1.png"}
+    )
     assert '<img src="img1.png">' in html
 
 
 def _rt(text):
-    return [{"type": "text", "plain_text": text, "text": {"content": text},
-             "annotations": {"bold": False, "italic": False, "strikethrough": False,
-                             "underline": False, "code": False, "color": "default"}}]
+    return [
+        {
+            "type": "text",
+            "plain_text": text,
+            "text": {"content": text},
+            "annotations": {
+                "bold": False,
+                "italic": False,
+                "strikethrough": False,
+                "underline": False,
+                "code": False,
+                "color": "default",
+            },
+        }
+    ]
 
 
 def test_canonical_id_and_deck_names():
-    assert canonical_page_id("https://app.notion.com/p/Philo-Histoire-1bbf4336b2b480f4a0b6fc07ce4ee5e4") \
+    assert (
+        canonical_page_id(
+            "https://app.notion.com/p/Philo-Histoire-1bbf4336b2b480f4a0b6fc07ce4ee5e4"
+        )
         == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
-    assert canonical_page_id(
-        "https://app.notion.com/p/Philo-Histoire-1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4"
-        "?source=copy_link"
-    ) == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
-    assert canonical_page_id("1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4") == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
+    )
+    assert (
+        canonical_page_id(
+            "https://app.notion.com/p/Philo-Histoire-1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4"
+            "?source=copy_link"
+        )
+        == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
+    )
+    assert (
+        canonical_page_id("1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4")
+        == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
+    )
     assert deck_safe("Le bonheur") == "Le bonheur"
     assert deck_safe("a: b::c") == "a  b/c"
     assert deck_safe("") == "Untitled"
@@ -162,7 +341,11 @@ def test_notion_client_uses_configured_token():
 
 
 def test_page_children_are_fetched_once():
-    from notion_sync_addon.sync import PageData, SyncResult, _collect_page_children
+    from notion_sync_addon.sync import (
+        PageData,
+        SyncResult,
+        _collect_page_children,
+    )
 
     class CountingTree:
         def __init__(self):
@@ -237,10 +420,18 @@ def test_existing_model_css_is_updated():
 def test_empty_cards_are_enabled_by_default():
     class Client:
         def get_database(self, database_id):
-            return {"title": [{"plain_text": "Table"}], "data_sources": [{"id": "ds"}]}
+            return {
+                "title": [{"plain_text": "Table"}],
+                "data_sources": [{"id": "ds"}],
+            }
 
         def query_data_source(self, data_source_id):
-            return [{"id": "row-1", "properties": {"Name": {"type": "title", "title": []}}}]
+            return [
+                {
+                    "id": "row-1",
+                    "properties": {"Name": {"type": "title", "title": []}},
+                }
+            ]
 
     class Tree:
         def children(self, block_id):
@@ -248,13 +439,17 @@ def test_empty_cards_are_enabled_by_default():
 
     result = SyncResult()
     result.config = {}
-    table = _fetch_table(Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result)
+    table = _fetch_table(
+        Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result
+    )
     assert table is not None
     assert len(table.rows) == 1
     assert table.rows[0].front == ""
 
     result.config = {"include_empty_cards": False}
-    table = _fetch_table(Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result)
+    table = _fetch_table(
+        Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result
+    )
     assert table is not None
     assert table.rows == []
 
@@ -274,7 +469,9 @@ def test_unchanged_requires_same_edit_time_full_minute_and_skew_margin():
     # fetched during the edit minute: a later edit in that minute is invisible
     assert not is_unchanged(RowState(EDITED, EDITED_TS + 30), EDITED, "k", now)
     # this computer's clock may run a few minutes ahead of Notion's
-    assert not is_unchanged(RowState(EDITED, EDITED_TS + 120), EDITED, "k", now)
+    assert not is_unchanged(
+        RowState(EDITED, EDITED_TS + 120), EDITED, "k", now
+    )
     assert not is_unchanged(fresh, "2026-11-04T11:45:00.000Z", "k", now)
     assert not is_unchanged(None, EDITED, "k", now)
     assert not is_unchanged(fresh, "", "k", now)
@@ -287,14 +484,27 @@ def test_unchanged_requires_same_edit_time_full_minute_and_skew_margin():
 
 
 def test_cached_rows_expire_after_7_to_14_days():
-    from notion_sync_addon.sync import AGE_SPREAD_SECONDS, MAX_AGE_SECONDS, max_age
+    from notion_sync_addon.sync import (
+        AGE_SPREAD_SECONDS,
+        MAX_AGE_SECONDS,
+        max_age,
+    )
 
     ages = [max_age(f"row{i}") for i in range(200)]
-    assert all(MAX_AGE_SECONDS <= a <= MAX_AGE_SECONDS + AGE_SPREAD_SECONDS for a in ages)
-    assert max(ages) - min(ages) > AGE_SPREAD_SECONDS / 2  # spread, not one day
+    assert all(
+        MAX_AGE_SECONDS <= a <= MAX_AGE_SECONDS + AGE_SPREAD_SECONDS
+        for a in ages
+    )
+    assert (
+        max(ages) - min(ages) > AGE_SPREAD_SECONDS / 2
+    )  # spread, not one day
     state = RowState(EDITED, EDITED_TS + 600)
-    assert is_unchanged(state, EDITED, "row1", EDITED_TS + 600 + max_age("row1") - 1)
-    assert not is_unchanged(state, EDITED, "row1", EDITED_TS + 600 + max_age("row1") + 1)
+    assert is_unchanged(
+        state, EDITED, "row1", EDITED_TS + 600 + max_age("row1") - 1
+    )
+    assert not is_unchanged(
+        state, EDITED, "row1", EDITED_TS + 600 + max_age("row1") + 1
+    )
 
 
 class _RowsClient:
@@ -302,15 +512,24 @@ class _RowsClient:
         self.rows = rows
 
     def get_database(self, database_id):
-        return {"title": [{"plain_text": "Defs"}], "data_sources": [{"id": "ds"}]}
+        return {
+            "title": [{"plain_text": "Defs"}],
+            "data_sources": [{"id": "ds"}],
+        }
 
     def query_data_source(self, data_source_id):
         return self.rows
 
 
 def _row(row_id, title, edited):
-    return {"id": row_id, "last_edited_time": edited, "url": "",
-            "properties": {"Name": {"type": "title", "title": [{"plain_text": title}]}}}
+    return {
+        "id": row_id,
+        "last_edited_time": edited,
+        "url": "",
+        "properties": {
+            "Name": {"type": "title", "title": [{"plain_text": title}]}
+        },
+    }
 
 
 @pytest.fixture
@@ -328,24 +547,47 @@ def test_unchanged_rows_skip_content_download(frozen_now):
     class Tree:
         def children(self, block_id):
             fetched.append(block_id)
-            return [{"type": "paragraph", "paragraph": {"rich_text": [
-                {"plain_text": "body", "annotations": {}, "type": "text",
-                 "text": {"content": "body"}}]}}]
+            return [
+                {
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "plain_text": "body",
+                                "annotations": {},
+                                "type": "text",
+                                "text": {"content": "body"},
+                            }
+                        ]
+                    },
+                }
+            ]
 
     later = "2026-11-04T11:45:00.000Z"
-    client = _RowsClient([_row("aaa", "Ideologie", EDITED), _row("bbb", "Racisme", later)])
+    client = _RowsClient(
+        [_row("aaa", "Ideologie", EDITED), _row("bbb", "Racisme", later)]
+    )
     result = SyncResult()
-    result.known = {"aaa": RowState(EDITED, EDITED_TS + 600, "fp"),
-                    "bbb": RowState(EDITED, EDITED_TS + 600, "fp")}
-    table = _fetch_table(client, Tree(), {"id": "db"}, MediaCollector(), "Page", result, "page")
+    result.known = {
+        "aaa": RowState(EDITED, EDITED_TS + 600, "fp"),
+        "bbb": RowState(EDITED, EDITED_TS + 600, "fp"),
+    }
+    table = _fetch_table(
+        client, Tree(), {"id": "db"}, MediaCollector(), "Page", result, "page"
+    )
 
     assert fetched == ["bbb"]  # only the edited row is downloaded
     by_id = {r.source_id: r for r in table.rows}
     assert by_id["aaa"].unchanged and by_id["aaa"].back_html == ""
     assert not by_id["bbb"].unchanged and "body" in by_id["bbb"].back_html
-    assert result.fetched["aaa"] == RowState(EDITED, EDITED_TS + 600, "fp", "page", "db")
+    assert result.fetched["aaa"] == RowState(
+        EDITED, EDITED_TS + 600, "fp", "page", "db"
+    )
     assert result.fetched["bbb"].edited == later
-    assert (result.fetched["bbb"].page_id, result.fetched["bbb"].db_id) == ("page", "db")
+    assert (result.fetched["bbb"].page_id, result.fetched["bbb"].db_id) == (
+        "page",
+        "db",
+    )
     assert not result.incomplete
 
 
@@ -357,7 +599,9 @@ def test_failed_table_query_marks_result_incomplete():
             raise NotionError("boom")
 
     result = SyncResult()
-    _fetch_table(Client([]), FakeTree(), {"id": "db"}, MediaCollector(), "Page", result)
+    _fetch_table(
+        Client([]), FakeTree(), {"id": "db"}, MediaCollector(), "Page", result
+    )
     assert result.incomplete  # apply_sync then skips removing notes
 
 
@@ -369,12 +613,19 @@ def test_unchanged_page_reuses_table_list_and_data_source(frozen_now):
     class Client:
         def get_page(self, page_id):
             calls.append("page")
-            return {"last_edited_time": EDITED,
-                    "properties": {"t": {"type": "title", "title": [{"plain_text": "Hist"}]}}}
+            return {
+                "last_edited_time": EDITED,
+                "properties": {
+                    "t": {"type": "title", "title": [{"plain_text": "Hist"}]}
+                },
+            }
 
         def get_database(self, database_id):
             calls.append("database")
-            return {"title": [{"plain_text": "Defs"}], "data_sources": [{"id": "ds-1"}]}
+            return {
+                "title": [{"plain_text": "Defs"}],
+                "data_sources": [{"id": "ds-1"}],
+            }
 
         def query_data_source(self, data_source_id):
             calls.append("query:" + data_source_id)
@@ -383,7 +634,13 @@ def test_unchanged_page_reuses_table_list_and_data_source(frozen_now):
     class Tree:
         def children(self, block_id):
             calls.append("blocks")
-            return [{"id": "db-1", "type": "child_database", "child_database": {"title": "Defs"}}]
+            return [
+                {
+                    "id": "db-1",
+                    "type": "child_database",
+                    "child_database": {"title": "Defs"},
+                }
+            ]
 
     import notion_sync_addon.sync as sync_mod
 
@@ -395,7 +652,10 @@ def test_unchanged_page_reuses_table_list_and_data_source(frozen_now):
         cfg = {"notion_token": "t", "notion_pages": [page_id]}
         first = fetch_pages(cfg)
         assert calls == ["page", "blocks", "database", "query:ds-1"]
-        structure = {"pages": dict(first.pages_out), "dbs": dict(first.dbs_out)}
+        structure = {
+            "pages": dict(first.pages_out),
+            "dbs": dict(first.dbs_out),
+        }
         # pretend the first fetch happened well after the page's last edit
         structure["pages"][page_id][1] = EDITED_TS + 600
         calls.clear()
@@ -523,15 +783,28 @@ def test_cache_file_roundtrip_corrupt_and_unchanged(tmp_path):
 
     path = str(tmp_path / "user_files" / "cache.json")
     assert load_cache(path).rows == {}  # missing
-    cache = Cache(rows={"r": RowState(EDITED, EDITED_TS, "fp", "p", "d", True)},
-                  pages={"p": [EDITED, EDITED_TS, [["d", "Defs"]]]}, dbs={"d": "ds"})
+    cache = Cache(
+        rows={"r": RowState(EDITED, EDITED_TS, "fp", "p", "d", True)},
+        pages={"p": [EDITED, EDITED_TS, [["d", "Defs"]]]},
+        dbs={"d": "ds"},
+    )
     assert save_cache(path, cache)
     loaded = load_cache(path)
-    assert loaded.rows == cache.rows and loaded.pages == cache.pages and loaded.dbs == cache.dbs
+    assert (
+        loaded.rows == cache.rows
+        and loaded.pages == cache.pages
+        and loaded.dbs == cache.dbs
+    )
     assert not save_cache(path, loaded)  # unchanged: not rewritten
-    assert os.listdir(tmp_path / "user_files") == ["cache.json"]  # no temp file left
-    for junk in ("{not json", "[]", '{"v": -1, "rows": {}}',
-                 '{"v": 2, "rows": {"r": [1]}, "pages": {"p": [1, "x", 3]}}'):
+    assert os.listdir(tmp_path / "user_files") == [
+        "cache.json"
+    ]  # no temp file left
+    for junk in (
+        "{not json",
+        "[]",
+        '{"v": -1, "rows": {}}',
+        '{"v": 2, "rows": {"r": [1]}, "pages": {"p": [1, "x", 3]}}',
+    ):
         with open(path, "w", encoding="utf-8") as f:
             f.write(junk)
         bad = load_cache(path)
@@ -546,8 +819,12 @@ OLD = "2026-01-01T00:00:00.000Z"
 
 
 def _para(text):
-    return {"id": "blk", "type": "paragraph", "has_children": False,
-            "paragraph": {"rich_text": _rt(text)}}
+    return {
+        "id": "blk",
+        "type": "paragraph",
+        "has_children": False,
+        "paragraph": {"rich_text": _rt(text)},
+    }
 
 
 class FakeNotion:
@@ -555,8 +832,12 @@ class FakeNotion:
 
     def __init__(self):
         self.pages = {}  # page id -> {"edited", "title", "tables": [db id]}
-        self.tables = {}  # db id -> {"title", "rows": {row id: [title, edited, blocks]}}
-        self.fail = set()  # ("page"|"db"|"query"|"row", id): server error (503)
+        self.tables = (
+            {}
+        )  # db id -> {"title", "rows": {row id: [title, edited, blocks]}}
+        self.fail = (
+            set()
+        )  # ("page"|"db"|"query"|"row", id): server error (503)
         self.media_fail = False
         self.downloads = []
         self.calls = []  # every request: (kind, id)
@@ -575,22 +856,41 @@ class FakeNotion:
             raise NotionError(f"page {pid} failed", 503, transient=True)
         if pid in self.pages:
             page = self.pages[pid]
-            return {"last_edited_time": page["edited"],
-                    "properties": {"t": {"type": "title",
-                                         "title": [{"plain_text": page["title"]}]}}}
+            return {
+                "last_edited_time": page["edited"],
+                "properties": {
+                    "t": {
+                        "type": "title",
+                        "title": [{"plain_text": page["title"]}],
+                    }
+                },
+            }
         for db, table in self.tables.items():
             if pid in table["rows"]:
-                return {"id": pid, "in_trash": False, "parent": {"database_id": db}}
+                return {
+                    "id": pid,
+                    "in_trash": False,
+                    "parent": {"database_id": db},
+                }
         if pid in self.trashed:
-            return {"id": pid, "in_trash": True, "parent": {"database_id": self.trashed[pid]}}
+            return {
+                "id": pid,
+                "in_trash": True,
+                "parent": {"database_id": self.trashed[pid]},
+            }
         raise NotionError("object_not_found", 404)
 
     def children(self, bid):
         if bid in self.pages:
             self.calls.append(("blocks", bid))
-            return [{"id": db, "type": "child_database",
-                     "child_database": {"title": self.tables[db]["title"]}}
-                    for db in self.pages[bid]["tables"]]
+            return [
+                {
+                    "id": db,
+                    "type": "child_database",
+                    "child_database": {"title": self.tables[db]["title"]},
+                }
+                for db in self.pages[bid]["tables"]
+            ]
         for table in self.tables.values():
             if bid in table["rows"]:
                 if ("row", bid) in self.fail:
@@ -605,8 +905,10 @@ class FakeNotion:
             raise NotionError("GET database 503", 503, transient=True)
         if db not in self.tables:
             raise NotionError("object_not_found", 404)
-        return {"title": [{"plain_text": self.tables[db]["title"]}],
-                "data_sources": [{"id": self._ds_of(db)}]}
+        return {
+            "title": [{"plain_text": self.tables[db]["title"]}],
+            "data_sources": [{"id": self._ds_of(db)}],
+        }
 
     def query_data_source(self, ds):
         self.calls.append(("query", ds))
@@ -615,10 +917,22 @@ class FakeNotion:
             raise NotionError("object_not_found", 404)
         if ("query", db) in self.fail:
             raise NotionError("query 503", 503, transient=True)
-        return [{"id": rid, "last_edited_time": r[1], "url": "",
-                 "properties": {"Name": {"type": "title", "title": r[3] if len(r) > 3
-                                         else [{"plain_text": r[0]}]}}}
-                for rid, r in self.tables[db]["rows"].items()]
+        return [
+            {
+                "id": rid,
+                "last_edited_time": r[1],
+                "url": "",
+                "properties": {
+                    "Name": {
+                        "type": "title",
+                        "title": (
+                            r[3] if len(r) > 3 else [{"plain_text": r[0]}]
+                        ),
+                    }
+                },
+            }
+            for rid, r in self.tables[db]["rows"].items()
+        ]
 
     def download_file(self, url):
         if self.media_fail:
@@ -645,12 +959,26 @@ def env(tmp_path, monkeypatch):
     notion = FakeNotion()
     notion.pages[P1] = {"edited": OLD, "title": "Hist", "tables": [DB1]}
     notion.pages[P2] = {"edited": OLD, "title": "Philo", "tables": [DB2, DB3]}
-    notion.tables[DB1] = {"title": "Defs", "rows": {
-        _rid(i): [f"h{i}", OLD, [_para(f"hist {i}")]] for i in range(3)}}
-    notion.tables[DB2] = {"title": "Notions", "rows": {
-        _rid(10 + i): [f"p{i}", OLD, [_para(f"philo {i}")]] for i in range(3)}}
-    notion.tables[DB3] = {"title": "Auteurs", "rows": {
-        _rid(20 + i): [f"a{i}", OLD, [_para(f"author {i}")]] for i in range(2)}}
+    notion.tables[DB1] = {
+        "title": "Defs",
+        "rows": {
+            _rid(i): [f"h{i}", OLD, [_para(f"hist {i}")]] for i in range(3)
+        },
+    }
+    notion.tables[DB2] = {
+        "title": "Notions",
+        "rows": {
+            _rid(10 + i): [f"p{i}", OLD, [_para(f"philo {i}")]]
+            for i in range(3)
+        },
+    }
+    notion.tables[DB3] = {
+        "title": "Auteurs",
+        "rows": {
+            _rid(20 + i): [f"a{i}", OLD, [_para(f"author {i}")]]
+            for i in range(2)
+        },
+    }
     monkeypatch.setattr(sync_mod, "NotionClient", notion)
     monkeypatch.setattr(sync_mod, "BlockTree", lambda client: client)
     col = collection.Collection(str(tmp_path / "col.anki2"))
@@ -665,8 +993,14 @@ def env(tmp_path, monkeypatch):
 
     def run(full=False, between=None):
         prep = sync_mod.prepare_sync(col, path, full)
-        result = sync_mod.fetch_pages(e.cfg, prep.known, None, prep.structure, prep.previous,
-                                      prep.sources)
+        result = sync_mod.fetch_pages(
+            e.cfg,
+            prep.known,
+            None,
+            prep.structure,
+            prep.previous,
+            prep.sources,
+        )
         result.cache_path = path
         if between:
             between()
@@ -691,7 +1025,13 @@ def test_first_sync_then_noop_is_cached_and_not_undoable(env):
     env.notion.downloads.clear()
     env.col.add_custom_undo_entry("Previous action")
     second = env.sync()
-    assert second == {"added": 0, "updated": 0, "removed": 0, "unchanged": 8, "media": 0}
+    assert second == {
+        "added": 0,
+        "updated": 0,
+        "removed": 0,
+        "unchanged": 8,
+        "media": 0,
+    }
     assert env.notion.downloads == []
     assert env.result.changes is None
     assert env.col.undo_status().undo == "Previous action"  # no new undo entry
@@ -700,7 +1040,8 @@ def test_first_sync_then_noop_is_cached_and_not_undoable(env):
 def test_large_sync_is_still_one_undo_step(env):
     """Anki keeps ~30 undo steps; 100 note changes must still merge into one."""
     env.notion.tables[DB1]["rows"].update(
-        {_rid(100 + i): [f"x{i}", OLD, [_para(f"x {i}")]] for i in range(100)})
+        {_rid(100 + i): [f"x{i}", OLD, [_para(f"x {i}")]] for i in range(100)}
+    )
     env.col.add_custom_undo_entry("Previous action")
     assert env.sync()["added"] == 108
     assert env.col.undo_status().undo == "Notion Sync"
@@ -720,7 +1061,10 @@ def test_failed_table_lookup_never_drops_its_cards(env):
     env.sync_mod.save_cache(env.path, cache)
     stats = env.sync()
     assert stats["removed"] == 0 and env.result.incomplete
-    assert env.sync_mod.load_cache(env.path).pages[P2][2] == [[DB2, "Notions"], [DB3, "Auteurs"]]
+    assert env.sync_mod.load_cache(env.path).pages[P2][2] == [
+        [DB2, "Notions"],
+        [DB3, "Auteurs"],
+    ]
     env.notion.fail = set()
     stats = env.sync()
     assert stats["removed"] == 0 and env.count() == 8
@@ -729,7 +1073,9 @@ def test_failed_table_lookup_never_drops_its_cards(env):
 def test_removal_is_scoped_to_the_failed_table(env):
     env.sync()
     del env.notion.tables[DB1]["rows"][_rid(0)]  # deleted in a healthy table
-    del env.notion.tables[DB2]["rows"][_rid(10)]  # deleted in the failing table
+    del env.notion.tables[DB2]["rows"][
+        _rid(10)
+    ]  # deleted in the failing table
     env.notion.fail = {("query", DB2)}
     stats = env.sync()
     assert env.result.incomplete and stats["removed"] == 1
@@ -775,7 +1121,11 @@ def test_edit_in_anki_is_overwritten_by_notion(env):
 
 def test_undo_of_a_sync_heals_on_next_sync(env):
     env.sync()
-    env.notion.tables[DB1]["rows"][_rid(0)] = ["h0", "2026-01-05T00:00:00.000Z", [_para("v2")]]
+    env.notion.tables[DB1]["rows"][_rid(0)] = [
+        "h0",
+        "2026-01-05T00:00:00.000Z",
+        [_para("v2")],
+    ]
     assert env.sync()["updated"] == 1
     env.col.undo()
     assert "hist 0" in env.note(_rid(0))["Back"]
@@ -832,9 +1182,21 @@ def test_duplicates_keep_the_oldest_note(env):
 
 def test_failed_media_is_written_but_retried(env):
     env.sync()
-    image = {"id": "1a2b" + "0" * 28, "type": "image", "has_children": False,
-             "image": {"type": "file", "file": {"url": "https://s3/pic.png?x=1"}, "caption": []}}
-    env.notion.tables[DB1]["rows"][_rid(0)] = ["h0", "2026-01-05T00:00:00.000Z", [image]]
+    image = {
+        "id": "1a2b" + "0" * 28,
+        "type": "image",
+        "has_children": False,
+        "image": {
+            "type": "file",
+            "file": {"url": "https://s3/pic.png?x=1"},
+            "caption": [],
+        },
+    }
+    env.notion.tables[DB1]["rows"][_rid(0)] = [
+        "h0",
+        "2026-01-05T00:00:00.000Z",
+        [image],
+    ]
     env.notion.media_fail = True
     stats = env.sync()
     assert stats["updated"] == 1 and not env.result.incomplete
@@ -851,8 +1213,16 @@ def test_failed_media_is_written_but_retried(env):
 
 
 def test_media_from_an_earlier_sync_is_reused_when_download_fails(env):
-    image = {"id": "1a2b" + "0" * 28, "type": "image", "has_children": False,
-             "image": {"type": "file", "file": {"url": "https://s3/pic.png?x=1"}, "caption": []}}
+    image = {
+        "id": "1a2b" + "0" * 28,
+        "type": "image",
+        "has_children": False,
+        "image": {
+            "type": "file",
+            "file": {"url": "https://s3/pic.png?x=1"},
+            "caption": [],
+        },
+    }
     env.notion.tables[DB1]["rows"][_rid(0)] = ["h0", OLD, [image]]
     env.sync()
     back = env.note(_rid(0))["Back"]
@@ -864,13 +1234,19 @@ def test_media_from_an_earlier_sync_is_reused_when_download_fails(env):
 
 
 def test_synced_block_copies_are_rechecked_hourly(env, monkeypatch):
-    synced = {"id": "sb", "type": "synced_block", "has_children": True,
-              "synced_block": {"synced_from": {"block_id": "elsewhere"}}}
+    synced = {
+        "id": "sb",
+        "type": "synced_block",
+        "has_children": True,
+        "synced_block": {"synced_from": {"block_id": "elsewhere"}},
+    }
     env.notion.tables[DB1]["rows"][_rid(0)][2] = [_para("x"), synced]
     env.sync()
     env.notion.downloads.clear()
     env.sync()
-    assert env.notion.downloads == []  # a no-op right after: nothing downloaded
+    assert (
+        env.notion.downloads == []
+    )  # a no-op right after: nothing downloaded
     real = env.sync_mod.time.time
     monkeypatch.setattr(env.sync_mod.time, "time", lambda: real() + 3601)
     env.sync()
@@ -986,15 +1362,30 @@ def addon(env, monkeypatch, tmp_path):
     statuses = []
     monkeypatch.setattr(addon_mod, "mw", FakeMw(), raising=False)
     monkeypatch.setattr(addon_mod, "QueryOp", FakeQueryOp, raising=False)
-    monkeypatch.setattr(addon_mod, "tooltip", lambda msg, **k: shown.append(msg), raising=False)
-    monkeypatch.setattr(addon_mod, "showWarning", lambda msg, **k: shown.append(msg), raising=False)
+    monkeypatch.setattr(
+        addon_mod, "tooltip", lambda msg, **k: shown.append(msg), raising=False
+    )
+    monkeypatch.setattr(
+        addon_mod,
+        "showWarning",
+        lambda msg, **k: shown.append(msg),
+        raising=False,
+    )
     monkeypatch.setattr(addon_mod, "_op_finished", finished.append)
     real_set_status = addon_mod._set_status
-    monkeypatch.setattr(addon_mod, "_set_status", lambda text=None: (
-        statuses.append(text), real_set_status(text)))
+    monkeypatch.setattr(
+        addon_mod,
+        "_set_status",
+        lambda text=None: (statuses.append(text), real_set_status(text)),
+    )
     monkeypatch.setattr(addon_mod, "ADDON_DIR", str(tmp_path / "addon"))
     monkeypatch.setitem(addon_mod._state, "busy", False)
-    for key in ("followup_pending", "followup_running", "ankiweb_failed", "closing"):
+    for key in (
+        "followup_pending",
+        "followup_running",
+        "ankiweb_failed",
+        "closing",
+    ):
         monkeypatch.setitem(addon_mod._state, key, False)
 
     class A:
@@ -1002,7 +1393,13 @@ def addon(env, monkeypatch, tmp_path):
 
     a = A()
     a.mod, a.mw, a.shown, a.finished, a.statuses, a.queue = (
-        addon_mod, FakeMw, shown, finished, statuses, queue)
+        addon_mod,
+        FakeMw,
+        shown,
+        finished,
+        statuses,
+        queue,
+    )
     return a
 
 
@@ -1010,9 +1407,13 @@ def test_run_sync_end_to_end_without_modal_progress(addon, env):
     addon.mod.run_sync(manual=True)
     assert not addon.mod._state["busy"] and env.count() == 8
     assert len(addon.finished) == 1  # undo menu / screens refreshed once
-    assert os.path.exists(env.sync_mod.cache_path(str(addon.mod.ADDON_DIR), "User 1"))
+    assert os.path.exists(
+        env.sync_mod.cache_path(str(addon.mod.ADDON_DIR), "User 1")
+    )
     addon.mod.run_sync(manual=True)
-    assert len(addon.finished) == 1  # nothing changed: no undo step, no refresh
+    assert (
+        len(addon.finished) == 1
+    )  # nothing changed: no undo step, no refresh
     assert any("8 unchanged" in m for m in addon.shown)
 
 
@@ -1065,7 +1466,9 @@ def test_late_progress_of_an_old_sync_is_ignored(addon, env):
 def test_ankiweb_followup_runs_once_and_never_loops(addon, env, monkeypatch):
     env.cfg["sync_with_ankiweb"] = True
     # skip the AnkiWeb status request; upload straight away
-    monkeypatch.setattr(addon.mod, "_upload_to_ankiweb", addon.mod._start_followup_sync)
+    monkeypatch.setattr(
+        addon.mod, "_upload_to_ankiweb", addon.mod._start_followup_sync
+    )
     addon.mod._on_ankiweb_sync_will_start()
     addon.mod._on_ankiweb_sync_finished()
     assert env.count() == 8
@@ -1126,22 +1529,42 @@ def test_sync_error_probe_flags_failure(monkeypatch):
 
 
 def _image(block_id, name):
-    return {"id": block_id, "type": "image", "has_children": False,
-            "image": {"type": "file", "caption": [],
-                      "file": {"url": f"https://s3/x/{block_id}/{name}?sig=1"}}}
+    return {
+        "id": block_id,
+        "type": "image",
+        "has_children": False,
+        "image": {
+            "type": "file",
+            "caption": [],
+            "file": {"url": f"https://s3/x/{block_id}/{name}?sig=1"},
+        },
+    }
 
 
 def _mention(label="Other page", kind="page"):
-    return {"type": "mention", "plain_text": label, "annotations": {},
-            "mention": {"type": kind, kind: {"id": "z", "url": "https://notion.so/z"}}}
+    return {
+        "type": "mention",
+        "plain_text": label,
+        "annotations": {},
+        "mention": {
+            "type": kind,
+            kind: {"id": "z", "url": "https://notion.so/z"},
+        },
+    }
 
 
 def test_media_file_names_are_lowercase():
     """N1: Anki on Windows stores the first copy lowercased."""
     media = MediaCollector()
-    out = render_blocks([_image("AbCd" + "0" * 28, "Screen%20Shot.PNG")], media, FakeTree())
+    out = render_blocks(
+        [_image("AbCd" + "0" * 28, "Screen%20Shot.PNG")], media, FakeTree()
+    )
     (fname,) = media.files
-    assert fname == fname.lower() and fname.startswith("ns-abcd") and fname.endswith(".png")
+    assert (
+        fname == fname.lower()
+        and fname.startswith("ns-abcd")
+        and fname.endswith(".png")
+    )
     assert f"@@NSMEDIA:{fname}@@" in out
 
 
@@ -1149,14 +1572,20 @@ def test_full_resync_of_identical_content_changes_nothing(env):
     """N1: a re-download must produce exactly the stored HTML (media names
     included), on every platform: 0 updates, no undo step."""
     env.notion.tables[DB1]["rows"][_rid(0)][2] = [
-        _para("Café <b> & x"), _image("1a2b" + "0" * 28, "Screen%20Shot.png")]
-    env.notion.tables[DB1]["rows"][_rid(1)][2] = [_image("3c4d" + "0" * 28, "photo")]
+        _para("Café <b> & x"),
+        _image("1a2b" + "0" * 28, "Screen%20Shot.png"),
+    ]
+    env.notion.tables[DB1]["rows"][_rid(1)][2] = [
+        _image("3c4d" + "0" * 28, "photo")
+    ]
     env.sync()
     back = env.note(_rid(0))["Back"]
     assert 'src="ns-1a2b' in back and "screen_20shot.png" in back
     env.col.add_custom_undo_entry("Previous action")
     stats = env.sync(full=True)
-    assert stats["updated"] == 0 and stats["added"] == 0 and stats["removed"] == 0
+    assert (
+        stats["updated"] == 0 and stats["added"] == 0 and stats["removed"] == 0
+    )
     assert env.col.undo_status().undo == "Previous action"
     assert env.note(_rid(0))["Back"] == back
 
@@ -1169,10 +1598,16 @@ def test_cache_of_another_render_version_keeps_row_origins(tmp_path):
     from notion_sync_addon.sync import RENDER_VERSION, load_cache
 
     path = tmp_path / "cache.json"
-    path.write_text(json.dumps({
-        "v": RENDER_VERSION - 1,
-        "rows": {"r": [EDITED, EDITED_TS, "fp", "p", "d", 0]},
-        "pages": {"p": [EDITED, EDITED_TS, [["d", "Defs"]]]}, "dbs": {"d": "ds"}}))
+    path.write_text(
+        json.dumps(
+            {
+                "v": RENDER_VERSION - 1,
+                "rows": {"r": [EDITED, EDITED_TS, "fp", "p", "d", 0]},
+                "pages": {"p": [EDITED, EDITED_TS, [["d", "Defs"]]]},
+                "dbs": {"d": "ds"},
+            }
+        )
+    )
     cache = load_cache(str(path))
     assert cache.rows["r"] == RowState("", 0.0, "", "p", "d")  # never trusted
     assert cache.pages and cache.dbs == {"d": "ds"} and cache.raw == ""
@@ -1219,31 +1654,55 @@ def test_mentions_anywhere_make_a_row_volatile():
     """N3: mentions in table cells, captions and the row title are found."""
     from notion_sync_addon.sync import _has_live_mention, _is_volatile
 
-    cell_row = {"type": "table_row", "table_row": {"cells": [_rt("a"), [_mention()]]}}
+    cell_row = {
+        "type": "table_row",
+        "table_row": {"cells": [_rt("a"), [_mention()]]},
+    }
     assert _is_volatile(cell_row)
     caption = _image("i" * 32, "a.png")
     caption["image"]["caption"] = [_mention(kind="database")]
     assert _is_volatile(caption)
-    assert _is_volatile({"type": "callout", "callout": {"rich_text": [_mention(kind="user")]}})
-    assert not _is_volatile({"type": "paragraph", "paragraph": {"rich_text": [
-        _mention(kind="date")]}})
-    assert not _is_volatile({"type": "table_row", "table_row": {"cells": [_rt("a")]}})
+    assert _is_volatile(
+        {"type": "callout", "callout": {"rich_text": [_mention(kind="user")]}}
+    )
+    assert not _is_volatile(
+        {
+            "type": "paragraph",
+            "paragraph": {"rich_text": [_mention(kind="date")]},
+        }
+    )
+    assert not _is_volatile(
+        {"type": "table_row", "table_row": {"cells": [_rt("a")]}}
+    )
     assert _has_live_mention([_mention()]) and not _has_live_mention(_rt("x"))
 
 
-def test_rows_with_mentions_are_rechecked_hourly_not_every_sync(env, monkeypatch):
+def test_rows_with_mentions_are_rechecked_hourly_not_every_sync(
+    env, monkeypatch
+):
     """N3: a no-op sync right after a (full) sync downloads no row content."""
-    table = {"id": "tb", "type": "table", "has_children": True,
-             "table": {"has_column_header": False}}
+    table = {
+        "id": "tb",
+        "type": "table",
+        "has_children": True,
+        "table": {"has_column_header": False},
+    }
     env.notion.tables[DB1]["rows"][_rid(0)][2] = [table]  # mention in a cell
     # mention in the row title
-    env.notion.tables[DB1]["rows"][_rid(1)].append([{"plain_text": "see "}, _mention()])
+    env.notion.tables[DB1]["rows"][_rid(1)].append(
+        [{"plain_text": "see "}, _mention()]
+    )
     real_children = env.notion.children
 
     def children(bid):
         if bid == "tb":
-            return [{"id": "tr", "type": "table_row",
-                     "table_row": {"cells": [[_mention()]]}}]
+            return [
+                {
+                    "id": "tr",
+                    "type": "table_row",
+                    "table_row": {"cells": [[_mention()]]},
+                }
+            ]
         return real_children(bid)
 
     monkeypatch.setattr(env.notion, "children", children)
@@ -1267,7 +1726,9 @@ def test_invalid_page_entry_does_not_block_removal(env):
     stats = env.sync()
     assert stats["removed"] == 1 and not env.result.incomplete
     assert any("'not a page'" in w for w in env.result.warnings)
-    assert any("'not a page'" in p for p in env.sync_mod.load_cache(env.path).problems)
+    assert any(
+        "'not a page'" in p for p in env.sync_mod.load_cache(env.path).problems
+    )
 
 
 def test_page_mangled_into_an_invalid_entry_keeps_its_cards(env):
@@ -1293,7 +1754,9 @@ def test_unlisted_notes_of_unknown_origin_are_looked_up(env):
     stats = env.sync()
     assert env.result.incomplete and stats["removed"] == 1
     assert env.note(_rid(0)) is None and env.note(_rid(20)) is not None
-    looked_up = [c for c in env.notion.calls if c[0] == "page" and c[1] not in (P1, P2)]
+    looked_up = [
+        c for c in env.notion.calls if c[0] == "page" and c[1] not in (P1, P2)
+    ]
     assert sorted(c[1] for c in looked_up) == [_rid(0), _rid(20), _rid(21)]
     # origins learned for the kept rows: not asked again
     rows = env.sync_mod.load_cache(env.path).rows
@@ -1317,7 +1780,11 @@ def test_failures_are_kept_in_the_cache_until_a_clean_sync(env):
     env.notion.fail = {("query", DB2)}
     env.sync()
     problems = env.sync_mod.load_problems(env.path)
-    assert len(problems) == 1 and "Notions" in problems[0] and "Philo" in problems[0]
+    assert (
+        len(problems) == 1
+        and "Notions" in problems[0]
+        and "Philo" in problems[0]
+    )
     env.notion.fail = set()
     env.sync()
     assert env.sync_mod.load_problems(env.path) == []
@@ -1336,7 +1803,9 @@ def test_cache_write_failure_is_only_a_warning(env, monkeypatch):
     stats = env.sync()
     assert stats["added"] == 8 and env.count() == 8 and len(calls) == 2
     assert any("cache" in w for w in env.result.warnings)
-    assert not [f for f in os.listdir(os.path.dirname(env.path)) if f.endswith(".tmp")]
+    assert not [
+        f for f in os.listdir(os.path.dirname(env.path)) if f.endswith(".tmp")
+    ]
 
 
 def test_cache_write_is_retried_once(env, monkeypatch):
@@ -1359,7 +1828,9 @@ def test_cache_write_is_retried_once(env, monkeypatch):
 def test_same_row_twice_in_one_sync_makes_one_note(env):
     """N7: a page listed twice, or a row listed by two tables."""
     env.cfg["notion_pages"] = [P1, P2, P1, "https://www.notion.so/Hist-" + P1]
-    env.notion.tables[DB3]["rows"][_rid(0)] = list(env.notion.tables[DB1]["rows"][_rid(0)])
+    env.notion.tables[DB3]["rows"][_rid(0)] = list(
+        env.notion.tables[DB1]["rows"][_rid(0)]
+    )
     stats = env.sync()
     assert stats["added"] == 8 and env.count() == 8
     assert len(env.col.find_notes(f"Source:{_rid(0)}")) == 1
@@ -1382,7 +1853,9 @@ def test_hand_made_note_with_any_source_is_never_touched(env):
     stats = env.sync()
     assert stats["removed"] == 0 and stats["unchanged"] == 8
     assert all(env.col.get_note(nid)["Back"] == "by hand" for nid in mine)
-    assert set(env.sync_mod.synced_notes(env.col)) == set(env.sync_mod.load_cache(env.path).rows)
+    assert set(env.sync_mod.synced_notes(env.col)) == set(
+        env.sync_mod.load_cache(env.path).rows
+    )
 
 
 # --------------------------------------------------------------------- #
@@ -1406,7 +1879,9 @@ class _Dialogs:
         for creator, instance in list(self.entries.values()):
             if instance is not None:
                 instance.closeWithCallback(
-                    lambda: all(i is None for _, i in self.entries.values()) and onsuccess())
+                    lambda: all(i is None for _, i in self.entries.values())
+                    and onsuccess()
+                )
                 return
         onsuccess()
 
@@ -1420,7 +1895,9 @@ def test_closing_anki_waits_for_the_import(addon, env, monkeypatch):
     real_apply = env.sync_mod.apply_sync
 
     def apply_while_closing(col, result):
-        dialogs.closeAll(lambda: events.append("collection closed"))  # user quits
+        dialogs.closeAll(
+            lambda: events.append("collection closed")
+        )  # user quits
         events.append("closing requested")
         stats = real_apply(col, result)
         events.append("cards written")
@@ -1428,7 +1905,11 @@ def test_closing_anki_waits_for_the_import(addon, env, monkeypatch):
 
     monkeypatch.setattr(env.sync_mod, "apply_sync", apply_while_closing)
     addon.mod.run_sync(manual=False)
-    assert events == ["closing requested", "cards written", "collection closed"]
+    assert events == [
+        "closing requested",
+        "cards written",
+        "collection closed",
+    ]
     assert addon.mod._state["guard"] is None and env.count() == 8
     dialogs.closeAll(lambda: events.append("closed again"))  # nothing held now
     assert events[-1] == "closed again"
@@ -1445,7 +1926,9 @@ def test_import_failure_while_closing_is_quiet(addon, env, monkeypatch):
     assert not addon.mod._state["busy"]
 
 
-def test_missing_sync_error_hook_never_uploads_after_a_failed_status(addon, env, monkeypatch):
+def test_missing_sync_error_hook_never_uploads_after_a_failed_status(
+    addon, env, monkeypatch
+):
     """Nit: without aqt.sync.handle_sync_error Notion still syncs, but the
     follow-up upload needs Anki's status check to ask for a normal sync."""
     import sys
@@ -1493,7 +1976,9 @@ def qapp():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     widgets = pytest.importorskip("PyQt6.QtWidgets")
     if not _QAPP:
-        _QAPP.append(widgets.QApplication.instance() or widgets.QApplication([]))
+        _QAPP.append(
+            widgets.QApplication.instance() or widgets.QApplication([])
+        )
     return _QAPP[0]
 
 
@@ -1501,8 +1986,14 @@ def _dialog(problems=None):
     from notion_sync_addon.settings_ui import SettingsDialog
 
     cfg = {"notion_token": "t", "notion_pages": [P1, "garbage"]}
-    return SettingsDialog(cfg, canonical_page_id, lambda pid, token: "Hist",
-                          lambda c: None, lambda: None, problems=problems)
+    return SettingsDialog(
+        cfg,
+        canonical_page_id,
+        lambda pid, token: "Hist",
+        lambda c: None,
+        lambda: None,
+        problems=problems,
+    )
 
 
 def test_settings_dialog_shows_the_last_sync_problems(qapp):
@@ -1536,7 +2027,9 @@ def test_changed_media_under_the_same_name_is_imported(env):
     env.notion.tables[DB1]["rows"][_rid(0)][2] = [image]
     env.sync()
     first = env.note(_rid(0))["Back"]
-    image["image"]["file"]["url"] = image["image"]["file"]["url"].replace("sig=1", "sig=2")
+    image["image"]["file"]["url"] = image["image"]["file"]["url"].replace(
+        "sig=1", "sig=2"
+    )
     env.notion.tables[DB1]["rows"][_rid(0)][1] = "2026-01-05T00:00:00.000Z"
     assert env.sync()["updated"] == 1
     second = env.note(_rid(0))["Back"]

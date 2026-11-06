@@ -12,6 +12,7 @@ written in a third QueryOp that records a single "Notion Sync" undo step
 (only when something changed). Progress shows on the "Notion Sync" link
 next to Anki's Sync in the top toolbar.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,7 +32,9 @@ try:
     from aqt.utils import showWarning, tooltip
 
     _IN_ANKI = True
-except ImportError:  # imported outside Anki (tests / tooling) - register nothing
+except (
+    ImportError
+):  # imported outside Anki (tests / tooling) - register nothing
     _IN_ANKI = False
 
 MENU_TITLE = "Notion Sync"
@@ -137,9 +140,13 @@ class _CloseGuard:
     def __init__(self) -> None:
         self.callbacks: list = []
 
-    def closeWithCallback(self, callback: Callable[[], None]) -> None:  # noqa: N802
+    def closeWithCallback(
+        self, callback: Callable[[], None]
+    ) -> None:  # noqa: N802
         self.callbacks.append(callback)
-        tooltip("Notion Sync: finishing the import before closing...", period=3000)
+        tooltip(
+            "Notion Sync: finishing the import before closing...", period=3000
+        )
 
 
 def _dialog_manager() -> Any:
@@ -180,7 +187,9 @@ def _release_collection() -> None:
         mw.taskman.run_on_main(callback)
 
 
-def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False) -> None:
+def run_sync(
+    manual: bool = True, full: bool = False, then_ankiweb: bool = False
+) -> None:
     """Start a sync.
 
     ``full`` ignores every cache. ``then_ankiweb`` uploads the result with a
@@ -192,14 +201,18 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
         return
     if mw.col is None:
         if manual:
-            showWarning("Notion Sync: no collection is open (no profile loaded).")
+            showWarning(
+                "Notion Sync: no collection is open (no profile loaded)."
+            )
         return
 
     cfg = _config()
     if not cfg.get("notion_pages"):
         if manual:
-            showWarning("Notion Sync: no pages configured.\n"
-                        "Open Tools > Notion Sync > Settings and add a page.")
+            showWarning(
+                "Notion Sync: no pages configured.\n"
+                "Open Tools > Notion Sync > Settings and add a page."
+            )
         return
     if not sync.resolve_token(cfg):
         if manual:
@@ -238,6 +251,7 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
 
     def guarded(step: Callable[[Any], None]) -> Callable[[Any], None]:
         """A success callback that can't leave the sync stuck as busy."""
+
         def run(value: Any) -> None:
             try:
                 step(value)
@@ -245,6 +259,7 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
                 if isinstance(value, sync.SyncResult):
                     value.cleanup()
                 failed(exc)
+
         return run
 
     def progress(message: str) -> None:  # called on the background thread
@@ -260,13 +275,20 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
             return
 
         def fetch(_col) -> "sync.SyncResult":
-            result = sync.fetch_pages(cfg, prep.known, progress, prep.structure,
-                                      prep.previous, prep.sources)
+            result = sync.fetch_pages(
+                cfg,
+                prep.known,
+                progress,
+                prep.structure,
+                prep.previous,
+                prep.sources,
+            )
             result.cache_path = path
             return result
 
-        QueryOp(parent=mw, op=fetch, success=guarded(fetched)).failure(failed) \
-            .without_collection().run_in_background()
+        QueryOp(parent=mw, op=fetch, success=guarded(fetched)).failure(
+            failed
+        ).without_collection().run_in_background()
 
     def fetched(result: "sync.SyncResult") -> None:
         if aborted():
@@ -285,8 +307,11 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
                 if result.changes is not None:
                     _op_finished(result.changes)
                 _report(result, stats, manual)
-                changed = (stats.get("added", 0) + stats.get("updated", 0)
-                           + stats.get("removed", 0))
+                changed = (
+                    stats.get("added", 0)
+                    + stats.get("updated", 0)
+                    + stats.get("removed", 0)
+                )
                 if then_ankiweb and changed:
                     _upload_to_ankiweb()
             finally:
@@ -295,12 +320,17 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
         def apply_failed(exc: Exception) -> None:
             try:
                 result.cleanup()
-                if result.changes is not None:  # partial changes still form one undo step
+                if (
+                    result.changes is not None
+                ):  # partial changes still form one undo step
                     _op_finished(result.changes)
                 _finish(generation)
                 if _state["closing"] or mw.col is None:
                     # the next sync rewrites whatever was left half done
-                    print(f"Notion Sync import interrupted: {exc}", file=sys.stderr)
+                    print(
+                        f"Notion Sync import interrupted: {exc}",
+                        file=sys.stderr,
+                    )
                 else:
                     showWarning(f"Notion Sync failed while importing:\n{exc}")
             finally:
@@ -309,13 +339,15 @@ def run_sync(manual: bool = True, full: bool = False, then_ankiweb: bool = False
         # a QueryOp, not a CollectionOp: CollectionOp always shows Anki's
         # modal "Processing..." window; the undo step is made by apply_sync
         _hold_collection()
-        QueryOp(parent=mw, op=apply, success=guarded(applied)).failure(apply_failed) \
-            .run_in_background()
+        QueryOp(parent=mw, op=apply, success=guarded(applied)).failure(
+            apply_failed
+        ).run_in_background()
 
     try:
         _hold_collection()
-        QueryOp(parent=mw, op=prepare, success=guarded(prepared)).failure(failed) \
-            .run_in_background()
+        QueryOp(parent=mw, op=prepare, success=guarded(prepared)).failure(
+            failed
+        ).run_in_background()
     except Exception as exc:  # noqa: BLE001
         failed(exc)
 
@@ -327,7 +359,9 @@ def _finish(generation: Optional[int] = None) -> None:
     _set_status(None)
 
 
-def _report(result: "sync.SyncResult", stats: Dict[str, int], manual: bool) -> None:
+def _report(
+    result: "sync.SyncResult", stats: Dict[str, int], manual: bool
+) -> None:
     parts = []
     for key in ("added", "updated", "removed"):
         if stats.get(key):
@@ -351,8 +385,11 @@ def _report(result: "sync.SyncResult", stats: Dict[str, int], manual: bool) -> N
         showWarning(f"Notion Sync finished with warnings:\n\n{text}")
     elif result.warnings != _state["last_warnings"]:
         # automatic syncs: a table that keeps failing only warns once
-        tooltip(f"Notion Sync: {len(result.warnings)} warning(s). "
-                "Run Tools > Notion Sync > Sync Now to see them.", period=6000)
+        tooltip(
+            f"Notion Sync: {len(result.warnings)} warning(s). "
+            "Run Tools > Notion Sync > Sync Now to see them.",
+            period=6000,
+        )
     _state["last_warnings"] = list(result.warnings)
 
 
@@ -374,8 +411,11 @@ def _install_sync_error_probe() -> None:
         # follows only happens once Anki's status check succeeds and asks
         # for a normal sync (see _upload_to_ankiweb)
         _state["probe"] = False
-        print("Notion Sync: aqt.sync.handle_sync_error not found, failed AnkiWeb "
-              "syncs can't be detected", file=sys.stderr)
+        print(
+            "Notion Sync: aqt.sync.handle_sync_error not found, failed AnkiWeb "
+            "syncs can't be detected",
+            file=sys.stderr,
+        )
         return
     _state["probe"] = True
     if getattr(original, "_notion_sync_probe", False):
@@ -399,14 +439,22 @@ def _on_ankiweb_sync_finished(*_args: Any) -> None:
     if _state["followup_running"]:  # our own upload sync: don't loop
         _state["followup_running"] = False
         return
-    if _state["ankiweb_failed"] or _state["closing"] or not _config().get("sync_with_ankiweb"):
+    if (
+        _state["ankiweb_failed"]
+        or _state["closing"]
+        or not _config().get("sync_with_ankiweb")
+    ):
         return
     run_sync(manual=False, then_ankiweb=True)
 
 
 def _can_upload() -> bool:
     # without saved AnkiWeb credentials Anki would open its login dialog
-    return not _state["closing"] and mw.col is not None and bool(mw.pm.sync_auth())
+    return (
+        not _state["closing"]
+        and mw.col is not None
+        and bool(mw.pm.sync_auth())
+    )
 
 
 def _upload_to_ankiweb() -> None:
@@ -423,8 +471,10 @@ def _upload_to_ankiweb() -> None:
         # Anki calls back only when the status check worked (it swallows
         # errors), so a failing AnkiWeb never gets a follow-up sync
         if status.required == status.FULL_SYNC:  # would ask upload/download
-            tooltip("Notion Sync: AnkiWeb needs a full sync; press Sync to upload.",
-                    period=6000)
+            tooltip(
+                "Notion Sync: AnkiWeb needs a full sync; press Sync to upload.",
+                period=6000,
+            )
             return
         if status.required != getattr(status, "NORMAL_SYNC", 1):
             return  # nothing to upload
@@ -436,8 +486,12 @@ def _upload_to_ankiweb() -> None:
 def _start_followup_sync() -> None:
     if not _can_upload():
         return
-    if mw.media_syncer.is_syncing():  # the button would only open the media log
-        tooltip("Notion Sync: changes will be uploaded on the next AnkiWeb sync.")
+    if (
+        mw.media_syncer.is_syncing()
+    ):  # the button would only open the media log
+        tooltip(
+            "Notion Sync: changes will be uploaded on the next AnkiWeb sync."
+        )
         return
     _state["followup_pending"] = True
     try:
@@ -561,10 +615,15 @@ def _on_toolbar_links(links: list, toolbar: Any) -> None:
     if _config().get("sync_with_ankiweb"):
         return
     label = _toolbar_label("" if _state["busy"] else None)
-    links.append(toolbar.create_link(
-        "notionsync", label, lambda: run_sync(),
-        tip=f"Sync cards from Notion ({SHORTCUT})", id=TOOLBAR_LINK_ID,
-    ))
+    links.append(
+        toolbar.create_link(
+            "notionsync",
+            label,
+            lambda: run_sync(),
+            tip=f"Sync cards from Notion ({SHORTCUT})",
+            id=TOOLBAR_LINK_ID,
+        )
+    )
 
 
 def _redraw_toolbar() -> None:

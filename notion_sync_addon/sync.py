@@ -20,6 +20,7 @@ Phase 2 (collection, background QueryOp): ``apply_sync``
     ensure note type / decks exist, import media, add or update notes,
     remove obsolete ones, write the row cache file.
 """
+
 from __future__ import annotations
 
 import filecmp
@@ -104,16 +105,28 @@ class RowState:
     volatile: bool = False  # content can change without bumping `edited`
 
     def to_json(self) -> list:
-        return [self.edited, round(self.fetched_at, 1), self.fingerprint,
-                self.page_id, self.db_id, int(self.volatile)]
+        return [
+            self.edited,
+            round(self.fetched_at, 1),
+            self.fingerprint,
+            self.page_id,
+            self.db_id,
+            int(self.volatile),
+        ]
 
     @classmethod
     def from_json(cls, value: Any) -> Optional["RowState"]:
         if not isinstance(value, list) or len(value) != 6:
             return None
         try:
-            return cls(str(value[0]), float(value[1]), str(value[2]),
-                       str(value[3]), str(value[4]), bool(value[5]))
+            return cls(
+                str(value[0]),
+                float(value[1]),
+                str(value[2]),
+                str(value[3]),
+                str(value[4]),
+                bool(value[5]),
+            )
         except (TypeError, ValueError):
             return None
 
@@ -188,8 +201,12 @@ class SyncResult:
         self.failures = 0
         self.failed_pages: Set[str] = set()
         self.failed_dbs: Set[str] = set()
-        self.unscoped_failure = False  # a failure no page/table can be blamed for
-        self.protected: Set[str] = set()  # rows that exist in Notion but weren't read
+        self.unscoped_failure = (
+            False  # a failure no page/table can be blamed for
+        )
+        self.protected: Set[str] = (
+            set()
+        )  # rows that exist in Notion but weren't read
         # config entries that aren't a Notion page id or link
         self.invalid_entries: List[str] = []
         # short descriptions of what could not be read (kept in the cache
@@ -202,9 +219,15 @@ class SyncResult:
         # Sources of the synced notes before / after this sync
         self.sources: Set[str] = set()
         self.sources_after: Optional[Set[str]] = None
-        self.dbs_drop: Set[str] = set()  # cached data source ids that stopped working
-        self.db_pages: Dict[str, str] = {}  # every table met -> its configured page
-        self.changes: Any = None  # OpChanges of the undo step, None = no changes
+        self.dbs_drop: Set[str] = (
+            set()
+        )  # cached data source ids that stopped working
+        self.db_pages: Dict[str, str] = (
+            {}
+        )  # every table met -> its configured page
+        self.changes: Any = (
+            None  # OpChanges of the undo step, None = no changes
+        )
         self.progress: Progress = _no_progress
 
     def cleanup(self) -> None:
@@ -212,8 +235,13 @@ class SyncResult:
             shutil.rmtree(self.media_dir, ignore_errors=True)
 
 
-def _fail(result: SyncResult, message: str, page_id: str = "", db_id: str = "",
-          problem: str = "") -> None:
+def _fail(
+    result: SyncResult,
+    message: str,
+    page_id: str = "",
+    db_id: str = "",
+    problem: str = "",
+) -> None:
     result.incomplete = True
     result.failures += 1
     result.warnings.append(message)
@@ -242,12 +270,18 @@ def resolve_token(cfg: Optional[dict]) -> str:
         from aqt import mw  # type: ignore  # noqa: F401
 
         addon_dir = os.path.dirname(os.path.abspath(__file__))
-        bases = (os.path.join(addon_dir, "user_files"), addon_dir,
-                 os.getcwd(), os.path.expanduser("~"))
+        bases = (
+            os.path.join(addon_dir, "user_files"),
+            addon_dir,
+            os.getcwd(),
+            os.path.expanduser("~"),
+        )
     except Exception:
         bases = (os.getcwd(), os.path.expanduser("~"))
     for base in bases:
-        value = _dotenv_value(_read_dotenv(os.path.join(base, ".env")), "NOTION_API_TOKEN")
+        value = _dotenv_value(
+            _read_dotenv(os.path.join(base, ".env")), "NOTION_API_TOKEN"
+        )
         if value:
             return value
     return ""
@@ -300,7 +334,7 @@ def canonical_page_id(raw: str) -> str:
 
 def deck_safe(name: str) -> str:
     name = re.sub(r"\s+", " ", name).strip()
-    name = name.replace("::", "/")          # protect path separator first
+    name = name.replace("::", "/")  # protect path separator first
     name = re.sub(r"[\x00:\"]", " ", name)  # drop any other illegal chars
     return name or "Untitled"
 
@@ -323,8 +357,13 @@ def max_age(key: str) -> float:
     return MAX_AGE_SECONDS + spread * AGE_SPREAD_SECONDS
 
 
-def _fresh(cached_edited: str, fetched_at: float, edited: str, key: str,
-           now: Optional[float]) -> bool:
+def _fresh(
+    cached_edited: str,
+    fetched_at: float,
+    edited: str,
+    key: str,
+    now: Optional[float],
+) -> bool:
     if not edited or cached_edited != edited:
         return False
     edited_ts = _parse_notion_time(edited)
@@ -338,8 +377,12 @@ def _fresh(cached_edited: str, fetched_at: float, edited: str, key: str,
     return now - fetched_at < max_age(key)
 
 
-def is_unchanged(cached: Optional[RowState], edited: str, key: str = "",
-                 now: Optional[float] = None) -> bool:
+def is_unchanged(
+    cached: Optional[RowState],
+    edited: str,
+    key: str = "",
+    now: Optional[float] = None,
+) -> bool:
     """True when the cached content is still what Notion has for this row.
 
     A volatile row (page mentions, synced block copies) can change without
@@ -361,7 +404,9 @@ def is_unchanged(cached: Optional[RowState], edited: str, key: str = "",
 
 def cache_path(addon_dir: str, profile: str) -> str:
     """One cache file per profile in the add-on's user_files folder."""
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", profile).strip("._")[:40] or "profile"
+    safe = (
+        re.sub(r"[^A-Za-z0-9_.-]+", "_", profile).strip("._")[:40] or "profile"
+    )
     digest = hashlib.sha1(profile.encode("utf-8")).hexdigest()[:8]
     return os.path.join(addon_dir, "user_files", f"cache-{safe}-{digest}.json")
 
@@ -386,15 +431,27 @@ def load_cache(path: str) -> Cache:
     for key, value in _dict(state.get("rows")).items():
         row = RowState.from_json(value)
         if row is not None:
-            rows[str(key)] = row if current else RowState("", 0.0, "", row.page_id, row.db_id)
-    pages = {str(k): v for k, v in _dict(state.get("pages")).items()
-             if _valid_page_entry(v)}
+            rows[str(key)] = (
+                row
+                if current
+                else RowState("", 0.0, "", row.page_id, row.db_id)
+            )
+    pages = {
+        str(k): v
+        for k, v in _dict(state.get("pages")).items()
+        if _valid_page_entry(v)
+    }
     dbs = {str(k): str(v) for k, v in _dict(state.get("dbs")).items() if v}
     problems = state.get("problems")
     if not isinstance(problems, list):
         problems = []
-    return Cache(rows=rows, pages=pages, dbs=dbs,
-                 problems=[str(p) for p in problems], raw=raw if current else "")
+    return Cache(
+        rows=rows,
+        pages=pages,
+        dbs=dbs,
+        problems=[str(p) for p in problems],
+        raw=raw if current else "",
+    )
 
 
 def _dict(value: Any) -> dict:
@@ -402,19 +459,28 @@ def _dict(value: Any) -> dict:
 
 
 def _valid_page_entry(value: Any) -> bool:
-    return (isinstance(value, list) and len(value) == 3
-            and isinstance(value[0], str) and isinstance(value[1], (int, float))
-            and isinstance(value[2], list)
-            and all(isinstance(t, list) and len(t) == 2 for t in value[2]))
+    return (
+        isinstance(value, list)
+        and len(value) == 3
+        and isinstance(value[0], str)
+        and isinstance(value[1], (int, float))
+        and isinstance(value[2], list)
+        and all(isinstance(t, list) and len(t) == 2 for t in value[2])
+    )
 
 
 def _cache_text(cache: Cache) -> str:
-    return json.dumps({"v": RENDER_VERSION,
-                       "rows": {k: v.to_json() for k, v in sorted(cache.rows.items())},
-                       "pages": dict(sorted(cache.pages.items())),
-                       "dbs": dict(sorted(cache.dbs.items())),
-                       "problems": list(cache.problems)},
-                      separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        {
+            "v": RENDER_VERSION,
+            "rows": {k: v.to_json() for k, v in sorted(cache.rows.items())},
+            "pages": dict(sorted(cache.pages.items())),
+            "dbs": dict(sorted(cache.dbs.items())),
+            "problems": list(cache.problems),
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
 
 
 def save_cache(path: str, cache: Cache) -> bool:
@@ -449,7 +515,10 @@ def fingerprint(front: str, back: str) -> str:
 
 
 def _field_indexes(model: dict) -> Dict[str, int]:
-    return {fld.get("name"): index for index, fld in enumerate(model.get("flds", []))}
+    return {
+        fld.get("name"): index
+        for index, fld in enumerate(model.get("flds", []))
+    }
 
 
 def synced_notes(col) -> Dict[str, List[Tuple[int, str]]]:
@@ -463,7 +532,11 @@ def synced_notes(col) -> Dict[str, List[Tuple[int, str]]]:
     if model is None:
         return {}
     index = _field_indexes(model)
-    src, front, back = index.get("Source"), index.get("Front"), index.get("Back")
+    src, front, back = (
+        index.get("Source"),
+        index.get("Front"),
+        index.get("Back"),
+    )
     if src is None or front is None or back is None:
         return {}
     out: Dict[str, List[Tuple[int, str]]] = {}
@@ -475,11 +548,15 @@ def synced_notes(col) -> Dict[str, List[Tuple[int, str]]]:
         source = parts[src].strip()
         if not SOURCE_ID.fullmatch(source):
             continue
-        out.setdefault(source, []).append((nid, fingerprint(parts[front], parts[back])))
+        out.setdefault(source, []).append(
+            (nid, fingerprint(parts[front], parts[back]))
+        )
     return out
 
 
-def trusted_rows(cache: Cache, notes: Dict[str, List[Tuple[int, str]]]) -> Dict[str, RowState]:
+def trusted_rows(
+    cache: Cache, notes: Dict[str, List[Tuple[int, str]]]
+) -> Dict[str, RowState]:
     """Cached rows whose note still holds exactly what the add-on wrote.
 
     Anything else (note deleted, edited in Anki, undone, changed by another
@@ -488,7 +565,11 @@ def trusted_rows(cache: Cache, notes: Dict[str, List[Tuple[int, str]]]) -> Dict[
     out: Dict[str, RowState] = {}
     for key, state in cache.rows.items():
         entries = notes.get(key)
-        if entries and state.fingerprint and entries[0][1] == state.fingerprint:
+        if (
+            entries
+            and state.fingerprint
+            and entries[0][1] == state.fingerprint
+        ):
             out[key] = state
     return out
 
@@ -498,10 +579,14 @@ def prepare_sync(col, path: str, full: bool = False) -> Prepared:
     previous = load_cache(path)
     notes = synced_notes(col)
     if full:  # Full Resync: trust nothing, but keep row origins for removal
-        return Prepared(known={}, structure={}, previous=previous, sources=set(notes))
+        return Prepared(
+            known={}, structure={}, previous=previous, sources=set(notes)
+        )
     known = trusted_rows(previous, notes)
     structure = {"pages": dict(previous.pages), "dbs": dict(previous.dbs)}
-    return Prepared(known=known, structure=structure, previous=previous, sources=set(notes))
+    return Prepared(
+        known=known, structure=structure, previous=previous, sources=set(notes)
+    )
 
 
 def load_problems(path: str) -> List[str]:
@@ -570,8 +655,10 @@ def fetch_pages(
                 # from this entry, so it doesn't hold up removal elsewhere
                 # (see _removal_blocked for an entry that used to be valid)
                 result.invalid_entries.append(raw)
-                message = (f"Ignored page '{raw}' in the settings: "
-                           "not a Notion page link or id")
+                message = (
+                    f"Ignored page '{raw}' in the settings: "
+                    "not a Notion page link or id"
+                )
                 result.warnings.append(message)
                 result.problems.append(message)
                 continue
@@ -581,13 +668,18 @@ def fetch_pages(
             try:
                 _fetch_page(page_id, client, tree, media, result)
             except NotionError as e:
-                _fail(result, str(e), page_id=page_id,
-                      problem=f"Page {page_id[:8]}...: {_reason(e)}")
+                _fail(
+                    result,
+                    str(e),
+                    page_id=page_id,
+                    problem=f"Page {page_id[:8]}...: {_reason(e)}",
+                )
 
         if result.sources and result.incomplete:
             _check_unlisted(client, result)
         result.media_files, result.failed_media = _download_media(
-            client, media, result.media_dir, result.progress)
+            client, media, result.media_dir, result.progress
+        )
         _forget_rows_with_failed_media(result)
     except BaseException:
         result.cleanup()
@@ -619,9 +711,14 @@ def _fetch_page(
     if cached and _fresh(cached[0], float(cached[1]), edited, page_id, None):
         # page untouched: same tables as last time, skip walking its blocks
         for db_id, db_title in cached[2]:
-            block = {"id": db_id, "type": "child_database",
-                     "child_database": {"title": db_title}}
-            table = _fetch_table(client, tree, block, media, data.deck_name, result, page_id)
+            block = {
+                "id": db_id,
+                "type": "child_database",
+                "child_database": {"title": db_title},
+            }
+            table = _fetch_table(
+                client, tree, block, media, data.deck_name, result, page_id
+            )
             if table is not None:
                 data.tables.append(table)
         if result.failures == failures:
@@ -629,13 +726,23 @@ def _fetch_page(
         return
 
     fetched_at = time.time()
-    _collect_page_children(page_id, client, tree, media, data, result,
-                           blocks=tree.children(page_id))
+    _collect_page_children(
+        page_id,
+        client,
+        tree,
+        media,
+        data,
+        result,
+        blocks=tree.children(page_id),
+    )
     # a page with any failure keeps its previous cache entry: a table that
     # could not be read must not vanish from the cached table list
     if edited and result.failures == failures:
-        result.pages_out[page_id] = [edited, fetched_at,
-                                     [[t.db_id, t.raw_title] for t in data.tables]]
+        result.pages_out[page_id] = [
+            edited,
+            fetched_at,
+            [[t.db_id, t.raw_title] for t in data.tables],
+        ]
 
 
 def _collect_page_children(
@@ -657,10 +764,15 @@ def _collect_page_children(
             for col in tree.children(block["id"]):
                 if col.get("type") != "column" or not col.get("has_children"):
                     continue
-                databases += [inner for inner in tree.children(col["id"])
-                              if inner.get("type") == "child_database"]
+                databases += [
+                    inner
+                    for inner in tree.children(col["id"])
+                    if inner.get("type") == "child_database"
+                ]
     for block in databases:
-        table = _fetch_table(client, tree, block, media, data.deck_name, result, page_id)
+        table = _fetch_table(
+            client, tree, block, media, data.deck_name, result, page_id
+        )
         if table is not None:
             data.tables.append(table)
 
@@ -704,12 +816,16 @@ def _is_volatile(block: dict) -> bool:
         return True
     # a page mention shows the other page's current title; rich text sits
     # in the block's text, its caption (media, bookmarks) and table cells
-    if _has_live_mention(body.get("rich_text")) or _has_live_mention(body.get("caption")):
+    if _has_live_mention(body.get("rich_text")) or _has_live_mention(
+        body.get("caption")
+    ):
         return True
     return any(_has_live_mention(cell) for cell in body.get("cells") or [])
 
 
-def _resolve_table(client: NotionClient, db_id: str, block_title: str) -> Tuple[str, str]:
+def _resolve_table(
+    client: NotionClient, db_id: str, block_title: str
+) -> Tuple[str, str]:
     """(data source id, title) of a database."""
     db = client.get_database(db_id)
     ds = data_source_of(db) or {}
@@ -732,7 +848,9 @@ def _fetch_table(
     page_id: str = "",
 ) -> Optional[TableData]:
     db_id = db_block.get("id", "")
-    block_title = str((db_block.get("child_database") or {}).get("title") or "").strip()
+    block_title = str(
+        (db_block.get("child_database") or {}).get("title") or ""
+    ).strip()
     if page_id:
         result.db_pages[db_id] = page_id
     cached_ds = result.db_cache.get(db_id, "")
@@ -745,8 +863,13 @@ def _fetch_table(
         try:
             ds_id, title = _resolve_table(client, db_id, block_title)
         except NotionError as e:
-            _fail(result, f"Table {block_title or db_id}: {e}", page_id, db_id,
-                  f"Table '{block_title or db_id}'{where}: {_reason(e)}")
+            _fail(
+                result,
+                f"Table {block_title or db_id}: {e}",
+                page_id,
+                db_id,
+                f"Table '{block_title or db_id}'{where}: {_reason(e)}",
+            )
             return None
     table = TableData(title=deck_safe(title), db_id=db_id, raw_title=title)
     result.progress(title)
@@ -770,8 +893,13 @@ def _fetch_table(
             except NotionError as again:
                 error = again
         if rows is None:
-            _fail(result, f"Table '{title}': {error}", page_id, db_id,
-                  f"Table '{title}'{where}: {_reason(error)}")
+            _fail(
+                result,
+                f"Table '{title}': {error}",
+                page_id,
+                db_id,
+                f"Table '{title}'{where}: {_reason(error)}",
+            )
             return table
     result.dbs_out[db_id] = ds_id
 
@@ -781,20 +909,35 @@ def _fetch_table(
         live_title = False
         for prop in row.get("properties", {}).values():
             if prop.get("type") == "title":
-                front = "".join(x.get("plain_text", "") for x in prop.get("title", [])).strip()
+                front = "".join(
+                    x.get("plain_text", "") for x in prop.get("title", [])
+                ).strip()
                 live_title = _has_live_mention(prop.get("title"))
                 break
-        if not front and not bool(result.config.get("include_empty_cards", True)):
-            result.warnings.append(f"Suspended empty row in table '{title}' (no title): skipped")
+        if not front and not bool(
+            result.config.get("include_empty_cards", True)
+        ):
+            result.warnings.append(
+                f"Suspended empty row in table '{title}' (no title): skipped"
+            )
             continue
         row_id = row["id"].replace("-", "")
         edited = str(row.get("last_edited_time") or "")
         cached = result.known.get(row_id)
         if is_unchanged(cached, edited, row_id, now):
             assert cached is not None
-            result.fetched[row_id] = replace(cached, page_id=page_id, db_id=db_id)
-            table.rows.append(RowCard(source_id=row_id, front=front, back_html="",
-                                      url=row.get("url", ""), unchanged=True))
+            result.fetched[row_id] = replace(
+                cached, page_id=page_id, db_id=db_id
+            )
+            table.rows.append(
+                RowCard(
+                    source_id=row_id,
+                    front=front,
+                    back_html="",
+                    url=row.get("url", ""),
+                    unchanged=True,
+                )
+            )
             continue
         result.progress(f"{title} {index}/{len(rows)}")
         fetched_at = time.time()
@@ -804,13 +947,29 @@ def _fetch_table(
         except NotionError as e:
             # still listed in Notion: keep its note, retry next sync
             result.protected.add(row_id)
-            _fail(result, f"Row '{front}' in '{title}': {e}", page_id, db_id,
-                  f"Row '{front}' in '{title}': {_reason(e)}")
+            _fail(
+                result,
+                f"Row '{front}' in '{title}': {e}",
+                page_id,
+                db_id,
+                f"Row '{front}' in '{title}': {_reason(e)}",
+            )
             continue
-        result.fetched[row_id] = RowState(edited, fetched_at, "", page_id, db_id,
-                                          recorder.volatile or live_title)
+        result.fetched[row_id] = RowState(
+            edited,
+            fetched_at,
+            "",
+            page_id,
+            db_id,
+            recorder.volatile or live_title,
+        )
         table.rows.append(
-            RowCard(source_id=row_id, front=front, back_html=back, url=row.get("url", ""))
+            RowCard(
+                source_id=row_id,
+                front=front,
+                back_html=back,
+                url=row.get("url", ""),
+            )
         )
     return table
 
@@ -829,9 +988,15 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
     remembered so the next sync doesn't need to ask again. Any error (the
     row may just not be shared) keeps the note.
     """
-    listed = {row.source_id for page in result.pages for table in page.tables
-              for row in table.rows} | result.protected
-    pending = sorted(s for s in result.sources - listed if _origin(s, result) is None)
+    listed = {
+        row.source_id
+        for page in result.pages
+        for table in page.tables
+        for row in table.rows
+    } | result.protected
+    pending = sorted(
+        s for s in result.sources - listed if _origin(s, result) is None
+    )
     if not pending:
         return
     # database id -> (configured page, database id as the sync records it)
@@ -855,16 +1020,21 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
         parent = row.get("parent") or {}
         known = tables.get(_bare(parent.get("database_id") or ""))
         if known is not None:
-            result.recovered[source_id] = RowState("", 0.0, "", known[0], known[1])
+            result.recovered[source_id] = RowState(
+                "", 0.0, "", known[0], known[1]
+            )
     if len(pending) > MAX_ORIGIN_CHECKS:
         result.warnings.append(
             f"{len(pending) - MAX_ORIGIN_CHECKS} card(s) of unknown origin were kept; "
-            "they are checked on the next syncs")
+            "they are checked on the next syncs"
+        )
 
 
 def _origin(source_id: str, result: SyncResult) -> Optional[RowState]:
     """Where a note's row was last seen, if known."""
-    origin = result.previous.rows.get(source_id) or result.recovered.get(source_id)
+    origin = result.previous.rows.get(source_id) or result.recovered.get(
+        source_id
+    )
     if origin is None or not origin.page_id:
         return None
     return origin
@@ -894,7 +1064,9 @@ def _download_media(
             path += ext
         with open(path, "wb") as f:
             f.write(blob)
-        out.append((path, fname + (ext if not os.path.splitext(fname)[1] else "")))
+        out.append(
+            (path, fname + (ext if not os.path.splitext(fname)[1] else ""))
+        )
     return out, failed
 
 
@@ -913,19 +1085,29 @@ def _forget_rows_with_failed_media(result: SyncResult) -> None:
     for page in result.pages:
         for table in page.tables:
             for row in table.rows:
-                if row.unchanged or not set(_PLACEHOLDER.findall(row.back_html)) & result.failed_media:
+                if (
+                    row.unchanged
+                    or not set(_PLACEHOLDER.findall(row.back_html))
+                    & result.failed_media
+                ):
                     continue
                 _forget(result, row.source_id)
-    shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
-    result.warnings.append(f"Could not download {len(names)} media file(s), "
-                           f"will retry next sync: {shown}")
+    shown = ", ".join(names[:5]) + (
+        f" and {len(names) - 5} more" if len(names) > 5 else ""
+    )
+    result.warnings.append(
+        f"Could not download {len(names)} media file(s), "
+        f"will retry next sync: {shown}"
+    )
 
 
 def _forget(result: SyncResult, source_id: str) -> None:
     """Keep only where the row came from: its content is fetched next sync."""
     state = result.fetched.get(source_id)
     if state is not None:
-        result.fetched[source_id] = RowState("", 0.0, "", state.page_id, state.db_id)
+        result.fetched[source_id] = RowState(
+            "", 0.0, "", state.page_id, state.db_id
+        )
 
 
 def _sniff_ext(blob: bytes) -> str:
@@ -962,7 +1144,9 @@ def _no_change() -> None:
     pass
 
 
-def _get_or_create_model(col, before_change: Callable[[], None] = _no_change) -> dict:
+def _get_or_create_model(
+    col, before_change: Callable[[], None] = _no_change
+) -> dict:
     """Find or build the 'Notion Sync Card' note type."""
     model = col.models.by_name(MODEL_NAME)
     if model is not None:
@@ -1038,7 +1222,9 @@ def _media_present(col) -> Tuple[str, Set[str]]:
 
 def _same_file(a: str, b: str) -> bool:
     try:
-        return os.path.getsize(a) == os.path.getsize(b) and filecmp.cmp(a, b, shallow=False)
+        return os.path.getsize(a) == os.path.getsize(b) and filecmp.cmp(
+            a, b, shallow=False
+        )
     except OSError:
         return False
 
@@ -1051,7 +1237,9 @@ def _import_media(col, result: SyncResult) -> Dict[str, str]:
     would conclude too, after hashing and rewriting it while the
     collection is held."""
     imported_names: Dict[str, str] = {}
-    folder, present = _media_present(col) if result.media_files else ("", set())
+    folder, present = (
+        _media_present(col) if result.media_files else ("", set())
+    )
     for path, fname in result.media_files:
         name = os.path.split(fname)[-1]
         if name in present and _same_file(path, os.path.join(folder, name)):
@@ -1070,7 +1258,9 @@ def _import_media(col, result: SyncResult) -> Dict[str, str]:
     return imported_names
 
 
-def apply_sync(col, result: SyncResult, undo_name: Optional[str] = UNDO_NAME) -> Dict[str, int]:
+def apply_sync(
+    col, result: SyncResult, undo_name: Optional[str] = UNDO_NAME
+) -> Dict[str, int]:
     """Write decks/media/notes to the collection and save the row cache.
 
     Runs inside a QueryOp (background thread); the Anki backend serialises
@@ -1102,16 +1292,24 @@ def _save_cache_quietly(result: SyncResult) -> None:
             if attempt:
                 result.warnings.append(
                     f"Could not save the sync cache ({e}); the cards are up to date, "
-                    "the next sync just downloads more rows")
+                    "the next sync just downloads more rows"
+                )
             else:
                 time.sleep(0.5)
 
 
 def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
-    from anki.notes import Note  # local import: keep module import cheap at startup
+    from anki.notes import (  # local import: keep module import cheap at startup
+        Note,
+    )
 
-    stats = {"added": 0, "updated": 0, "removed": 0, "unchanged": 0,
-             "media": len(result.media_files)}
+    stats = {
+        "added": 0,
+        "updated": 0,
+        "removed": 0,
+        "unchanged": 0,
+        "media": len(result.media_files),
+    }
     _drop_legacy_state(col, undo.begin)
     model = _get_or_create_model(col, undo.begin)
     imported_names = _import_media(col, result)
@@ -1134,19 +1332,27 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                 if row.unchanged:
                     # checked again here: the note may have been edited,
                     # undone or deleted while Notion was being read
-                    if nid is not None and state is not None and current == state.fingerprint:
+                    if (
+                        nid is not None
+                        and state is not None
+                        and current == state.fingerprint
+                    ):
                         stats["unchanged"] += 1
                     else:
                         _forget(result, row.source_id)
                     continue
                 front = unicodedata.normalize("NFC", row.front)
                 back = unicodedata.normalize(
-                    "NFC", MediaCollector.resolve(row.back_html, imported_names))
+                    "NFC",
+                    MediaCollector.resolve(row.back_html, imported_names),
+                )
                 written = fingerprint(front, back)
                 if nid is None:
                     undo.begin()
                     if deck_id is None:
-                        deck_id = get_or_create_deck(col, f"{page.deck_name}::{table.title}")
+                        deck_id = get_or_create_deck(
+                            col, f"{page.deck_name}::{table.title}"
+                        )
                     note = Note(col, model)
                     note["Front"] = front
                     note["Back"] = back
@@ -1170,7 +1376,9 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     # fingerprint of what Anki actually stored (normally
                     # what was written; read back in case it differs)
                     stored = col.get_note(nid)
-                    state.fingerprint = fingerprint(stored["Front"], stored["Back"])
+                    state.fingerprint = fingerprint(
+                        stored["Front"], stored["Back"]
+                    )
     removed, gone = _remove_obsolete(col, notes, seen, result, undo.begin)
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
@@ -1187,7 +1395,9 @@ def _removal_blocked(source_id: str, result: SyncResult) -> bool:
     if source_id in result.confirmed_gone:  # Notion says it's in the trash
         return False
     origin = _origin(source_id, result)
-    if result.invalid_entries and (origin is None or origin.page_id not in result.page_ids):
+    if result.invalid_entries and (
+        origin is None or origin.page_id not in result.page_ids
+    ):
         # an invalid page entry may be a page that used to be configured
         # (e.g. its link got mangled): keep the cards that may be its own
         return True
@@ -1197,7 +1407,10 @@ def _removal_blocked(source_id: str, result: SyncResult) -> bool:
         return True
     if origin is None:
         return True  # don't know where it came from
-    return origin.page_id in result.failed_pages or origin.db_id in result.failed_dbs
+    return (
+        origin.page_id in result.failed_pages
+        or origin.db_id in result.failed_dbs
+    )
 
 
 def _remove_obsolete(
@@ -1230,13 +1443,28 @@ def _next_cache(result: SyncResult) -> Cache:
     """The cache after this sync. Rows kept although Notion didn't list them
     (their page/table could not be read) keep their old entry."""
     rows = dict(result.fetched)
-    remaining = result.sources_after if result.sources_after is not None else set(rows)
-    for key, state in list(result.previous.rows.items()) + list(result.recovered.items()):
+    remaining = (
+        result.sources_after if result.sources_after is not None else set(rows)
+    )
+    for key, state in list(result.previous.rows.items()) + list(
+        result.recovered.items()
+    ):
         if key not in rows and key in remaining:
             rows[key] = state
-    pages = {k: v for k, v in result.previous.pages.items() if k in result.page_ids}
+    pages = {
+        k: v for k, v in result.previous.pages.items() if k in result.page_ids
+    }
     pages.update(result.pages_out)
-    dbs = {k: v for k, v in result.previous.dbs.items() if k not in result.dbs_drop}
+    dbs = {
+        k: v
+        for k, v in result.previous.dbs.items()
+        if k not in result.dbs_drop
+    }
     dbs.update(result.dbs_out)
-    return Cache(rows=rows, pages=pages, dbs=dbs, problems=list(result.problems),
-                 raw=result.previous.raw)
+    return Cache(
+        rows=rows,
+        pages=pages,
+        dbs=dbs,
+        problems=list(result.problems),
+        raw=result.previous.raw,
+    )

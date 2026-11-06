@@ -12,6 +12,7 @@ collection writer can download & import them, see MediaCollector.
 
 This module is standalone (no Anki imports) so it can be unit tested.
 """
+
 from __future__ import annotations
 
 import html
@@ -43,6 +44,7 @@ class MediaCollector:
     @staticmethod
     def resolve(html_text: str, fname_to_imported: Dict[str, str]) -> str:
         """Replace placeholders with the final exported media filenames."""
+
         def repl(m: "re.Match[str]") -> str:
             fname = m.group(1)
             dest = fname_to_imported.get(fname)
@@ -75,9 +77,16 @@ def _plain(rts: List[dict]) -> str:
 # --------------------------------------------------------------------- #
 
 _COLOR_CSS = {
-    "red": "#c0392b", "blue": "#2980b9", "green": "#27ae60", "yellow": "#b7950b",
-    "purple": "#8e44ad", "pink": "#c0397b", "orange": "#ca6f1e", "brown": "#873600",
-    "gray": "#7f8c8d", "grey": "#7f8c8d",
+    "red": "#c0392b",
+    "blue": "#2980b9",
+    "green": "#27ae60",
+    "yellow": "#b7950b",
+    "purple": "#8e44ad",
+    "pink": "#c0397b",
+    "orange": "#ca6f1e",
+    "brown": "#873600",
+    "gray": "#7f8c8d",
+    "grey": "#7f8c8d",
 }
 
 
@@ -107,7 +116,9 @@ def rich_text_to_html(rts: Optional[List[dict]]) -> str:
                     base = _COLOR_CSS.get(color[: -len("_background")])
                     if base:
                         bg = _tint(base)
-                        style = f"background:{bg};border-radius:3px;padding:0 2px"
+                        style = (
+                            f"background:{bg};border-radius:3px;padding:0 2px"
+                        )
                 else:
                     fg = _COLOR_CSS.get(color)
                     if fg:
@@ -119,14 +130,18 @@ def rich_text_to_html(rts: Optional[List[dict]]) -> str:
             out.append(chunk)
         elif t == "equation":
             # Anki-native MathJax inline delimiters
-            out.append("\\(" + rt.get("equation", {}).get("expression", "") + "\\)")
+            out.append(
+                "\\(" + rt.get("equation", {}).get("expression", "") + "\\)"
+            )
         elif t == "mention":
             mention = rt.get("mention", {})
             label = rt.get("plain_text", "")
             if mention.get("type") == "page":
                 url = (mention.get("page") or {}).get("url", "")
                 if url:
-                    out.append(f'<a href="{html.escape(url, quote=True)}">{_esc(label)}</a>')
+                    out.append(
+                        f'<a href="{html.escape(url, quote=True)}">{_esc(label)}</a>'
+                    )
                 else:
                     out.append(_esc(label))
             else:
@@ -146,10 +161,28 @@ def _tint(hex_color: str) -> str:
 # --------------------------------------------------------------------- #
 
 _BLOCK_BODY_TYPES = (
-    "paragraph", "heading_1", "heading_2", "heading_3", "heading_4",
-    "bulleted_list_item", "numbered_list_item", "to_do", "toggle",
-    "quote", "callout", "code", "equation", "table", "image", "video",
-    "file", "audio", "bookmark", "embed", "link_preview", "divider",
+    "paragraph",
+    "heading_1",
+    "heading_2",
+    "heading_3",
+    "heading_4",
+    "bulleted_list_item",
+    "numbered_list_item",
+    "to_do",
+    "toggle",
+    "quote",
+    "callout",
+    "code",
+    "equation",
+    "table",
+    "image",
+    "video",
+    "file",
+    "audio",
+    "bookmark",
+    "embed",
+    "link_preview",
+    "divider",
 )
 
 _CODE_BLOCK_STYLE = (
@@ -182,14 +215,18 @@ def render_blocks(blocks: List[dict], media: MediaCollector, tree: Any) -> str:
             while i < n and blocks[i].get("type") == btype:
                 items.append(blocks[i])
                 i += 1
-            out.append(f"<{tag}>{_render_list_items(items, btype, media, tree)}</{tag}>")
+            out.append(
+                f"<{tag}>{_render_list_items(items, btype, media, tree)}</{tag}>"
+            )
             continue
 
         out.append(_render_block(block, media, tree))
     return "\n".join(x for x in out if x)
 
 
-def _render_list_items(items: List[dict], btype: str, media: MediaCollector, tree: Any) -> str:
+def _render_list_items(
+    items: List[dict], btype: str, media: MediaCollector, tree: Any
+) -> str:
     parts: List[str] = []
     for item in items:
         body = item.get(btype, {})
@@ -240,7 +277,9 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
             f'<code>{html.escape(content)}</code></pre>'
         )
     if btype == "equation":
-        return "<div class='ns-eq'>\\[" + body.get("expression", "") + "\\]</div>"
+        return (
+            "<div class='ns-eq'>\\[" + body.get("expression", "") + "\\]</div>"
+        )
     if btype == "divider":
         return "<hr>"
     if btype in ("image", "video", "audio", "file"):
@@ -291,7 +330,11 @@ def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
             for t, cell in zip(tags, cells)
         )
         open_thead = '<thead>' if idx == 0 and col_header else ''
-        close_thead = '</thead><tbody>' if idx == 0 and col_header and len(rows) > 1 else ('</thead>' if idx == 0 and col_header else '')
+        close_thead = (
+            '</thead><tbody>'
+            if idx == 0 and col_header and len(rows) > 1
+            else ('</thead>' if idx == 0 and col_header else '')
+        )
         lines.append(f"{open_thead}<tr>{cells_html}</tr>{close_thead}")
     if col_header:
         lines.append("</tbody>")

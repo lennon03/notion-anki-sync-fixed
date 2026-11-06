@@ -6,6 +6,7 @@ data sources and data source queries. Handles pagination and 429/5xx
 retries, and keeps one HTTPS connection alive per thread (saves the TLS
 handshake on every request, ~25% per call).
 """
+
 from __future__ import annotations
 
 import http.client
@@ -36,8 +37,12 @@ class NotionError(Exception):
     a non-transient error means Notion rejected the request as such.
     """
 
-    def __init__(self, message: str, status: Optional[int] = None,
-                 transient: bool = False) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: Optional[int] = None,
+        transient: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status = status
         self.transient = transient
@@ -47,7 +52,9 @@ class NotionError(Exception):
         if self.status in (401,):
             return "the token was rejected (401)"
         if self.status in (403, 404):
-            return f"not found or not shared with the integration ({self.status})"
+            return (
+                f"not found or not shared with the integration ({self.status})"
+            )
         if self.status == 429:
             return "rate limited by Notion (429)"
         if self.status is not None and self.status >= 500:
@@ -78,7 +85,9 @@ class NotionClient:
     def _connection(self) -> http.client.HTTPSConnection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = http.client.HTTPSConnection(API_HOST, timeout=REQUEST_TIMEOUT_SECONDS)
+            conn = http.client.HTTPSConnection(
+                API_HOST, timeout=REQUEST_TIMEOUT_SECONDS
+            )
             self._local.conn = conn
         return conn
 
@@ -88,9 +97,11 @@ class NotionClient:
             conn.close()
             self._local.conn = None
 
-    def _request(self, method: str, path: str, data: Optional[dict] = None) -> dict:
+    def _request(
+        self, method: str, path: str, data: Optional[dict] = None
+    ) -> dict:
         if path.startswith(BASE_URL):
-            path = path[len(BASE_URL):]
+            path = path[len(BASE_URL) :]
         url = "/v1" + path
         body = json.dumps(data).encode("utf-8") if data is not None else None
         attempt = 0
@@ -109,24 +120,37 @@ class NotionClient:
                 # stale keep-alive socket or network blip: reconnect and retry
                 self._drop_connection()
                 if attempt > MAX_RETRIES:
-                    raise NotionError(f"Network error calling Notion for {path}: {e}",
-                                      transient=True) from e
+                    raise NotionError(
+                        f"Network error calling Notion for {path}: {e}",
+                        transient=True,
+                    ) from e
                 time.sleep(RETRY_BACKOFF_SECONDS * (attempt - 1))
                 continue
             if status < 400:
                 try:
                     return json.loads(payload.decode("utf-8"))
                 except ValueError as e:  # truncated or non-JSON body
-                    raise NotionError(f"Invalid response from Notion for {path}: {e}",
-                                      status, transient=True) from e
+                    raise NotionError(
+                        f"Invalid response from Notion for {path}: {e}",
+                        status,
+                        transient=True,
+                    ) from e
             if status == 429 or status >= 500:
                 if attempt > MAX_RETRIES:
-                    raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}",
-                                      status, transient=True)
-                delay = retry_delay(retry_after, RETRY_BACKOFF_SECONDS * attempt)
+                    raise NotionError(
+                        f"Notion API error {status} for {path}: {payload[:300]!r}",
+                        status,
+                        transient=True,
+                    )
+                delay = retry_delay(
+                    retry_after, RETRY_BACKOFF_SECONDS * attempt
+                )
                 time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
                 continue
-            raise NotionError(f"Notion API error {status} for {path}: {payload[:300]!r}", status)
+            raise NotionError(
+                f"Notion API error {status} for {path}: {payload[:300]!r}",
+                status,
+            )
 
     def _iterate(self, results: List[dict], has_more: bool) -> List[dict]:
         return list(results)
@@ -157,7 +181,9 @@ class NotionClient:
     def get_data_source(self, data_source_id: str) -> dict:
         return self._request("GET", f"/data_sources/{data_source_id}")
 
-    def query_data_source(self, data_source_id: str, title_only: bool = True) -> List[dict]:
+    def query_data_source(
+        self, data_source_id: str, title_only: bool = True
+    ) -> List[dict]:
         """All row pages of a data source, following pagination.
 
         ``title_only`` asks Notion to return just the title property: the
@@ -180,7 +206,9 @@ class NotionClient:
     def download_file(self, url: str) -> bytes:
         """Download a Notion-hosted (or external) file. No auth needed."""
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
+        with urllib.request.urlopen(
+            req, timeout=REQUEST_TIMEOUT_SECONDS
+        ) as resp:
             return resp.read()
 
 
@@ -207,7 +235,9 @@ def page_title(obj: dict) -> str:
     """Extract the plain-text title from a page object."""
     for prop in obj.get("properties", {}).values():
         if prop.get("type") == "title":
-            return "".join(x.get("plain_text", "") for x in prop.get("title", [])).strip()
+            return "".join(
+                x.get("plain_text", "") for x in prop.get("title", [])
+            ).strip()
     return ""
 
 

@@ -8,6 +8,7 @@ settings panels in the captured Ocean mockups.
 
 The module only needs Qt, so it can be rendered outside Anki for previews.
 """
+
 from __future__ import annotations
 
 import os
@@ -16,24 +17,67 @@ from typing import Callable, List, Optional
 
 try:
     from aqt.qt import (
-        QAbstractButton, QColor, QDesktopServices, QDialog, QFont, QFontDatabase, QFrame,
-        QHBoxLayout, QIcon, QLabel, QLineEdit, QObject, QPainter, QPalette,
-        QPixmap, QPushButton, QRectF, QScrollArea, QSize,
-        QSpinBox, Qt, QToolButton, QUrl, QVariantAnimation, QVBoxLayout,
-        QWidget, pyqtSignal,
+        QAbstractButton,
+        QColor,
+        QDesktopServices,
+        QDialog,
+        QFont,
+        QFontDatabase,
+        QFrame,
+        QHBoxLayout,
+        QIcon,
+        QLabel,
+        QLineEdit,
+        QObject,
+        QPainter,
+        QPalette,
+        QPixmap,
+        QPushButton,
+        QRectF,
+        QScrollArea,
+        QSize,
+        QSpinBox,
+        Qt,
+        QToolButton,
+        QUrl,
+        QVariantAnimation,
+        QVBoxLayout,
+        QWidget,
+        pyqtSignal,
     )
 except ImportError:  # standalone preview
     from PyQt6.QtCore import (  # type: ignore[no-redef]
-        QObject, QRectF, QSize, Qt, QUrl, QVariantAnimation, pyqtSignal,
+        QObject,
+        QRectF,
+        QSize,
+        Qt,
+        QUrl,
+        QVariantAnimation,
+        pyqtSignal,
     )
     from PyQt6.QtGui import (  # type: ignore[no-redef]
-        QColor, QDesktopServices, QFont, QFontDatabase, QIcon, QPainter, QPalette,
+        QColor,
+        QDesktopServices,
+        QFont,
+        QFontDatabase,
+        QIcon,
+        QPainter,
+        QPalette,
         QPixmap,
     )
     from PyQt6.QtWidgets import (  # type: ignore[no-redef]
-        QAbstractButton, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-        QPushButton, QScrollArea, QSpinBox, QToolButton,
-        QVBoxLayout, QWidget,
+        QAbstractButton,
+        QDialog,
+        QFrame,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QPushButton,
+        QScrollArea,
+        QSpinBox,
+        QToolButton,
+        QVBoxLayout,
+        QWidget,
     )
 
 # --------------------------------------------------------------------- #
@@ -111,10 +155,20 @@ def use_theme(dark: bool) -> None:
     P.update(DARK if dark else LIGHT)
 
 
-FONT_FAMILIES = ["Inter", "Segoe UI Variable Text", "Segoe UI",
-                 ".AppleSystemUIFont", "SF Pro Text", "Helvetica Neue", "Ubuntu", "sans-serif"]
+FONT_FAMILIES = [
+    "Inter",
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    ".AppleSystemUIFont",
+    "SF Pro Text",
+    "Helvetica Neue",
+    "Ubuntu",
+    "sans-serif",
+]
 FONT_STACK = ", ".join(f'"{f}"' for f in FONT_FAMILIES)
-MONO_STACK = '"JetBrains Mono", "SF Mono", "Cascadia Mono", Consolas, monospace'
+MONO_STACK = (
+    '"JetBrains Mono", "SF Mono", "Cascadia Mono", Consolas, monospace'
+)
 
 
 def build_stylesheet(p: dict) -> str:
@@ -239,25 +293,25 @@ QToolTip {{
 
 _ICONS = {
     "eye": '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 '
-           '1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
+    '1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
     "eye-off": '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 '
-               '10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/>'
-               '<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 '
-               '10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
+    '10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/>'
+    '<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 '
+    '10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
     "trash": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>'
-             '<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+    '<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
     "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
     "minus": '<path d="M5 12h14"/>',
     "refresh": '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>'
-               '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>'
-               '<path d="M8 16H3v5"/>',
+    '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>'
+    '<path d="M8 16H3v5"/>',
     "file": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>'
-            '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/>'
-            '<path d="M16 17H8"/>',
+    '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/>'
+    '<path d="M16 17H8"/>',
     "external": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/>'
-                '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+    '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
     "alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 '
-             '1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    '1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 }
 
 
@@ -296,8 +350,9 @@ def icon(name: str, color: str = "", size: int = 16, scale: int = 3) -> QIcon:
     return QIcon(pixmap)
 
 
-def set_icon(widget: QWidget, name: str, role: str = "MUTED_FOREGROUND",
-             size: int = 16) -> None:
+def set_icon(
+    widget: QWidget, name: str, role: str = "MUTED_FOREGROUND", size: int = 16
+) -> None:
     """Give a button or label a lucide icon in a palette color.
 
     The spec is remembered on the widget so ``refresh_icons`` can redraw it
@@ -334,7 +389,9 @@ class Switch(QAbstractButton):
 
     TRACK_W, TRACK_H, THUMB = 30, 18, 14
 
-    def __init__(self, checked: bool = False, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self, checked: bool = False, parent: Optional[QWidget] = None
+    ) -> None:
         super().__init__(parent)
         self.setCheckable(True)
         self.setChecked(checked)
@@ -375,14 +432,18 @@ class Switch(QAbstractButton):
         if self.hasFocus():
             p.setPen(QColor(P["RING"]))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(QRectF(0.5, 0.5, self.TRACK_W - 1, self.TRACK_H - 1), 8.5, 8.5)
+            p.drawRoundedRect(
+                QRectF(0.5, 0.5, self.TRACK_W - 1, self.TRACK_H - 1), 8.5, 8.5
+            )
             p.setPen(Qt.PenStyle.NoPen)
         x = 2 + (self.TRACK_W - 4 - self.THUMB) * t
         # shadow-sm/5
         p.setBrush(QColor(0, 0, 0, 18))
         p.drawEllipse(QRectF(x, 2.6, self.THUMB, self.THUMB))
         # dark mode: muted-foreground thumb while off (switch.tsx)
-        thumb_off, thumb_on = QColor(P["SWITCH_THUMB_OFF"]), QColor(P["BACKGROUND"])
+        thumb_off, thumb_on = QColor(P["SWITCH_THUMB_OFF"]), QColor(
+            P["BACKGROUND"]
+        )
         p.setBrush(thumb_on if t > 0.5 else thumb_off)
         p.drawEllipse(QRectF(x, 2, self.THUMB, self.THUMB))
         p.end()
@@ -391,8 +452,16 @@ class Switch(QAbstractButton):
 class NumberField(QFrame):
     """number-field.tsx: [ - | value | + ] inside one bordered control."""
 
-    def __init__(self, minimum: int, maximum: int, value: int, step: int = 5,
-                 suffix: str = "", special: str = "", parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        minimum: int,
+        maximum: int,
+        value: int,
+        step: int = 5,
+        suffix: str = "",
+        special: str = "",
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("numberField")
         self.spin = QSpinBox()
@@ -429,8 +498,13 @@ class NumberField(QFrame):
         lay.addWidget(inc)
         self.setFixedWidth(150)
 
-    def eventFilter(self, obj, event) -> bool:  # focus ring follows the inner spinbox
-        if obj is self.spin and event.type() in (event.Type.FocusIn, event.Type.FocusOut):
+    def eventFilter(
+        self, obj, event
+    ) -> bool:  # focus ring follows the inner spinbox
+        if obj is self.spin and event.type() in (
+            event.Type.FocusIn,
+            event.Type.FocusOut,
+        ):
             self.setProperty("focused", event.type() == event.Type.FocusIn)
             _repolish(self)
         return False
@@ -453,13 +527,19 @@ def style_placeholder(edit: QLineEdit) -> None:
     edit.setPalette(pal)
 
 
-def button(text: str, variant: str = "outline", icon_name: str = "") -> QPushButton:
+def button(
+    text: str, variant: str = "outline", icon_name: str = ""
+) -> QPushButton:
     btn = QPushButton(text)
     if variant != "outline":
         btn.setObjectName(variant)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
     if icon_name:
-        role = "PRIMARY_FOREGROUND" if variant == "primary" else "MUTED_FOREGROUND"
+        role = (
+            "PRIMARY_FOREGROUND"
+            if variant == "primary"
+            else "MUTED_FOREGROUND"
+        )
         set_icon(btn, icon_name, role, 14 if variant == "ghostXs" else 16)
     return btn
 
@@ -505,8 +585,12 @@ class Card(QFrame):
             _repolish(row)
 
 
-def setting_row(title: str, description: str = "", control: Optional[QWidget] = None,
-                below: Optional[QWidget] = None) -> QFrame:
+def setting_row(
+    title: str,
+    description: str = "",
+    control: Optional[QWidget] = None,
+    below: Optional[QWidget] = None,
+) -> QFrame:
     """Title + muted description on the left, control on the right."""
     row = QFrame()
     row.setObjectName("row")
@@ -572,11 +656,17 @@ class SettingsDialog(QDialog):
         problems: what the last sync could not read, shown above the pages.
     """
 
-    def __init__(self, cfg: dict, canonical_page_id: Callable[[str], str],
-                 lookup_name: Callable[[str, str], str],
-                 on_save: Callable[[dict], None], on_sync: Callable[[], None],
-                 parent: Optional[QWidget] = None, dark: bool = False,
-                 problems: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        cfg: dict,
+        canonical_page_id: Callable[[str], str],
+        lookup_name: Callable[[str, str], str],
+        on_save: Callable[[dict], None],
+        on_sync: Callable[[], None],
+        parent: Optional[QWidget] = None,
+        dark: bool = False,
+        problems: Optional[List[str]] = None,
+    ) -> None:
         super().__init__(parent)
         use_theme(dark)
         self.setObjectName("notionSyncSettings")
@@ -607,7 +697,9 @@ class SettingsDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         body = QWidget()
         body.setObjectName("body")
         self._body = QVBoxLayout(body)
@@ -648,9 +740,13 @@ class SettingsDialog(QDialog):
         lay.addWidget(label("Notion Sync", "crumb"))
         lay.addStretch(1)
         integrations = button("Notion integrations", "ghostXs", "external")
-        integrations.setToolTip("Open notion.so/my-integrations to create or copy a token")
+        integrations.setToolTip(
+            "Open notion.so/my-integrations to create or copy a token"
+        )
         integrations.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl("https://www.notion.so/my-integrations"))
+            lambda: QDesktopServices.openUrl(
+                QUrl("https://www.notion.so/my-integrations")
+            )
         )
         lay.addWidget(integrations)
         return header
@@ -669,15 +765,19 @@ class SettingsDialog(QDialog):
     def _build_connection(self, cfg: dict) -> None:
         self._section("Connection", first=True)
         card = Card()
-        self.token = text_input("Paste your Notion integration token",
-                                str(cfg.get("notion_token") or ""))
+        self.token = text_input(
+            "Paste your Notion integration token",
+            str(cfg.get("notion_token") or ""),
+        )
         self.token.setEchoMode(QLineEdit.EchoMode.Password)
         reveal = icon_button("eye", "Show token")
         reveal.setCheckable(True)
 
         def toggle(visible: bool) -> None:
             self.token.setEchoMode(
-                QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+                QLineEdit.EchoMode.Normal
+                if visible
+                else QLineEdit.EchoMode.Password
             )
             set_icon(reveal, "eye-off" if visible else "eye")
             reveal.setToolTip("Hide token" if visible else "Show token")
@@ -689,39 +789,53 @@ class SettingsDialog(QDialog):
         tl.setSpacing(6)
         tl.addWidget(self.token, 1)
         tl.addWidget(reveal)
-        card.add_row(setting_row(
-            "Notion token",
-            "Internal integration secret. Share each page with the integration in Notion.",
-            below=token_row,
-        ))
+        card.add_row(
+            setting_row(
+                "Notion token",
+                "Internal integration secret. Share each page with the integration in Notion.",
+                below=token_row,
+            )
+        )
         self._body.addWidget(card)
 
     def _build_sync(self, cfg: dict) -> None:
         self._section("Sync")
         card = Card()
         self.interval = NumberField(
-            0, 10080, max(0, int(cfg.get("sync_every_minutes") or 0)),
-            step=5, suffix=" min", special="Off",
+            0,
+            10080,
+            max(0, int(cfg.get("sync_every_minutes") or 0)),
+            step=5,
+            suffix=" min",
+            special="Off",
         )
-        self.interval.spin.valueChanged.connect(lambda _v: self._update_status())
-        card.add_row(setting_row(
-            "Auto-sync",
-            "Check Notion on a timer while Anki is open. Set to Off to sync manually.",
-            control=self.interval,
-        ))
+        self.interval.spin.valueChanged.connect(
+            lambda _v: self._update_status()
+        )
+        card.add_row(
+            setting_row(
+                "Auto-sync",
+                "Check Notion on a timer while Anki is open. Set to Off to sync manually.",
+                control=self.interval,
+            )
+        )
         self.with_ankiweb = Switch(bool(cfg.get("sync_with_ankiweb", False)))
-        card.add_row(setting_row(
-            "Anki's Sync button also syncs Notion",
-            "Pressing Sync in Anki pulls Notion too, so the separate Notion Sync "
-            "button is hidden. New cards are uploaded with a second AnkiWeb sync.",
-            control=self.with_ankiweb,
-        ))
+        card.add_row(
+            setting_row(
+                "Anki's Sync button also syncs Notion",
+                "Pressing Sync in Anki pulls Notion too, so the separate Notion Sync "
+                "button is hidden. New cards are uploaded with a second AnkiWeb sync.",
+                control=self.with_ankiweb,
+            )
+        )
         self.empty_cards = Switch(bool(cfg.get("include_empty_cards", True)))
-        card.add_row(setting_row(
-            "Untitled rows",
-            "Turn rows without a title into cards with an empty front.",
-            control=self.empty_cards,
-        ))
+        card.add_row(
+            setting_row(
+                "Untitled rows",
+                "Turn rows without a title into cards with an empty front.",
+                control=self.empty_cards,
+            )
+        )
         self._body.addWidget(card)
 
     def _build_problems(self) -> None:
@@ -739,9 +853,14 @@ class SettingsDialog(QDialog):
         lay.addWidget(glyph, 0, Qt.AlignmentFlag.AlignTop)
         text = QVBoxLayout()
         text.setSpacing(3)
-        text.addWidget(label("The last sync couldn't read everything", "rowTitle"))
-        desc = label("Cards from these parts are kept as they are. Cards deleted there in "
-                     "Notion are removed once a sync can read them again.", "rowDesc")
+        text.addWidget(
+            label("The last sync couldn't read everything", "rowTitle")
+        )
+        desc = label(
+            "Cards from these parts are kept as they are. Cards deleted there in "
+            "Notion are removed once a sync can read them again.",
+            "rowDesc",
+        )
         desc.setWordWrap(True)
         text.addWidget(desc)
         text.addSpacing(4)
@@ -749,10 +868,17 @@ class SettingsDialog(QDialog):
         for problem in shown:
             item = label(f"\u2022  {problem}", "problemItem")
             item.setWordWrap(True)
-            item.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            item.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
             text.addWidget(item)
         if len(self._problems) > len(shown):
-            text.addWidget(label(f"... and {len(self._problems) - len(shown)} more", "rowDesc"))
+            text.addWidget(
+                label(
+                    f"... and {len(self._problems) - len(shown)} more",
+                    "rowDesc",
+                )
+            )
         lay.addLayout(text, 1)
         card.add_row(row)
         self._body.addWidget(card)
@@ -765,11 +891,17 @@ class SettingsDialog(QDialog):
             self._build_problems()
         self.pages_card = Card()
 
-        self._empty_row = setting_row("No pages yet", "Add a page below. Each page becomes a deck.")
-        self._empty_row.findChild(QLabel, "rowTitle").setObjectName("emptyText")
+        self._empty_row = setting_row(
+            "No pages yet", "Add a page below. Each page becomes a deck."
+        )
+        self._empty_row.findChild(QLabel, "rowTitle").setObjectName(
+            "emptyText"
+        )
         self.pages_card.add_row(self._empty_row)
 
-        self.page_input = text_input("https://www.notion.so/... or 32-character page ID")
+        self.page_input = text_input(
+            "https://www.notion.so/... or 32-character page ID"
+        )
         self.page_input.returnPressed.connect(self._add_page)
         self.page_input.textChanged.connect(self._clear_error)
         add = button("Add page", "outline", "plus")
@@ -795,13 +927,17 @@ class SettingsDialog(QDialog):
         self._body.addWidget(self.pages_card)
 
         for entry in cfg.get("notion_pages", []):
-            value = entry if isinstance(entry, str) else entry.get("page_id", "")
+            value = (
+                entry if isinstance(entry, str) else entry.get("page_id", "")
+            )
             if not value:
                 continue
             try:
                 self._insert_page(self._canonical(str(value)))
             except Exception:
-                self._insert_page(str(value), name="Invalid page ID", resolve=False)
+                self._insert_page(
+                    str(value), name="Invalid page ID", resolve=False
+                )
 
     def _build_footer(self) -> QFrame:
         footer = QFrame()
@@ -822,7 +958,9 @@ class SettingsDialog(QDialog):
         cancel.clicked.connect(self.reject)
         apply.clicked.connect(self.save)
         save.clicked.connect(lambda: self.save() and self.accept())
-        sync_now.clicked.connect(lambda: self.save() and (self.accept(), self._on_sync()))
+        sync_now.clicked.connect(
+            lambda: self.save() and (self.accept(), self._on_sync())
+        )
         return footer
 
     # ---- pages -------------------------------------------------------- #
@@ -830,7 +968,9 @@ class SettingsDialog(QDialog):
     def page_ids(self) -> List[str]:
         return list(self._page_rows)
 
-    def _insert_page(self, page_id: str, name: str = "", resolve: bool = True) -> None:
+    def _insert_page(
+        self, page_id: str, name: str = "", resolve: bool = True
+    ) -> None:
         row = QFrame()
         row.setObjectName("row")
         lay = QHBoxLayout(row)
@@ -925,7 +1065,11 @@ class SettingsDialog(QDialog):
             self._empty_row.setVisible(n == 0)
         if hasattr(self, "status"):
             minutes = self.interval.value()
-            auto = f"auto-sync every {minutes} min" if minutes else "auto-sync off"
+            auto = (
+                f"auto-sync every {minutes} min"
+                if minutes
+                else "auto-sync off"
+            )
             self.status.setText(f"{n} page{'s' if n != 1 else ''} · {auto}")
 
     def config(self) -> dict:
