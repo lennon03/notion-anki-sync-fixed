@@ -2050,3 +2050,76 @@ def test_changed_media_under_the_same_name_is_imported(env):
     for back in (first, second):
         name = back.split('src="')[1].split('"')[0]
         assert os.path.exists(os.path.join(env.col.media.dir(), name))
+
+
+def test_settings_dialog_shows_problems_as_plain_text(qapp):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QLabel
+
+    dialog = _dialog(["Row '<b>x</b>' failed"])
+    items = [
+        w
+        for w in dialog.problems_card.findChildren(QLabel)
+        if w.objectName() == "problemItem"
+    ]
+    assert items and all(
+        w.textFormat() == Qt.TextFormat.PlainText for w in items
+    )
+    assert "<b>x</b>" in items[0].text()
+
+
+def _unlisted_result(n):
+    from notion_sync_addon.sync import SyncResult
+
+    result = SyncResult()
+    result.sources = {f"{i:032x}" for i in range(n)}
+    return result
+
+
+def test_unlisted_checks_rotate_through_rows_that_keep_failing(monkeypatch):
+    import notion_sync_addon.sync as sync_mod
+
+    asked: List[str] = []
+
+    class Client:
+        def get_page(self, pid):
+            asked.append(pid)
+            raise NotionError("404", 404)
+
+    total = sync_mod.MAX_ORIGIN_CHECKS + 5
+    result = _unlisted_result(total)
+    sync_mod._check_unlisted(cast(Any, Client()), result)
+    assert len(asked) == sync_mod.MAX_ORIGIN_CHECKS
+    assert any("5 card(s)" in w for w in result.warnings)
+    assert not result.confirmed_gone and not result.protected
+
+    # next sync: the cache remembers who was asked; the rest comes first
+    nxt = _unlisted_result(total)
+    nxt.previous.checked = dict(result.checked)
+    first = set(asked)
+    asked.clear()
+    sync_mod._check_unlisted(cast(Any, Client()), nxt)
+    assert set(asked) == nxt.sources - first and len(asked) == 5
+
+    # after a day the first rows are due again
+    later = _unlisted_result(total)
+    day2 = 2 * 24 * 3600
+    later.previous.checked = {
+        k: t - day2 for k, t in {**result.checked, **nxt.checked}.items()
+    }
+    asked.clear()
+    sync_mod._check_unlisted(cast(Any, Client()), later)
+    assert len(asked) == sync_mod.MAX_ORIGIN_CHECKS
+
+
+def test_cache_checked_map_roundtrips_and_is_optional(tmp_path):
+    from notion_sync_addon.sync import Cache, load_cache, save_cache
+
+    path = str(tmp_path / "c.json")
+    save_cache(path, Cache())
+    assert "checked" not in open(path, encoding="utf-8").read()
+    save_cache(path, Cache(checked={"a" * 32: 12.5}))
+    assert load_cache(path).checked == {"a" * 32: 12.5}
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('{"v": 3, "checked": {"x": "bad", "y": 1}}')
+    assert load_cache(path).checked == {"y": 1.0}

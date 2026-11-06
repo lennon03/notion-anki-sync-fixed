@@ -950,6 +950,7 @@ class SettingsDialog(QDialog):
         shown = self._problems[:6]
         for problem in shown:
             item = label(f"\u2022  {problem}", "problemItem")
+            item.setTextFormat(Qt.TextFormat.PlainText)  # user data
             item.setWordWrap(True)
             item.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse

@@ -144,7 +144,10 @@ class _CloseGuard:
     def closeWithCallback(
         self, callback: Callable[[], None]
     ) -> None:  # noqa: N802
-        self.callbacks.append(callback)
+        # closeAll may run twice (a second click on X): only the first
+        # callback continues Anki's closing, a second would unload twice
+        if not self.callbacks:
+            self.callbacks.append(callback)
         tooltip(
             "Notion Sync: finishing the import before closing...", period=3000
         )
@@ -313,6 +316,8 @@ def run_sync(
                 _finish(generation)
                 if result.changes is not None:
                     _op_finished(result.changes)
+                # release first: a modal warning must not block closing
+                _release_collection()
                 _report(result, stats, manual)
                 changed = (
                     stats.get("added", 0)
@@ -388,7 +393,9 @@ def _report(
     text = "\n".join(f"- {w}" for w in shown)
     if more > 0:
         text += f"\n... and {more} more"
-    if manual:
+    if _state["closing"]:
+        print(f"Notion Sync finished with warnings:\n{text}", file=sys.stderr)
+    elif manual:
         showWarning(f"Notion Sync finished with warnings:\n\n{text}")
     elif result.warnings != _state["last_warnings"]:
         # automatic syncs: a table that keeps failing only warns once

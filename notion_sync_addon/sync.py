@@ -78,6 +78,9 @@ VOLATILE_MAX_AGE_SECONDS = 3600
 # When part of Notion can't be read, notes whose row origin is unknown are
 # looked up one by one (GET /pages/<row>); at most this many per sync.
 MAX_ORIGIN_CHECKS = 25
+# A row that was asked about is asked again after this long, so rows that
+# keep failing don't starve the ones not yet asked.
+ORIGIN_RECHECK_SECONDS = 24 * 3600
 # The Source of a synced note: a Notion row id, 32 lowercase hex digits.
 # Notes of the add-on's note type with any other Source were made by hand.
 SOURCE_ID = re.compile(r"[0-9a-f]{32}")
@@ -142,6 +145,8 @@ class Cache:
     pages: Dict[str, list] = field(default_factory=dict)
     dbs: Dict[str, str] = field(default_factory=dict)
     problems: List[str] = field(default_factory=list)
+    # unlisted row id -> when _check_unlisted last asked Notion about it
+    checked: Dict[str, float] = field(default_factory=dict)
     raw: str = ""  # file content as loaded: an identical cache isn't rewritten
 
 
@@ -229,6 +234,8 @@ class SyncResult:
         self.confirmed_gone: Set[str] = set()
         # row origins learned by looking unlisted rows up (see _check_unlisted)
         self.recovered: Dict[str, RowState] = {}
+        # unlisted rows asked about in this run: row id -> time
+        self.checked: Dict[str, float] = {}
         # Sources of the synced notes before / after this sync
         self.sources: Set[str] = set()
         self.sources_after: Optional[Set[str]] = None
@@ -460,11 +467,17 @@ def load_cache(path: str) -> Cache:
     problems = state.get("problems")
     if not isinstance(problems, list):
         problems = []
+    checked = {
+        str(k): float(v)
+        for k, v in _dict(state.get("checked")).items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
     return Cache(
         rows=rows,
         pages=pages,
         dbs=dbs,
         problems=[str(p) for p in problems],
+        checked=checked,
         raw=raw if current else "",
     )
 
@@ -485,14 +498,17 @@ def _valid_page_entry(value: Any) -> bool:
 
 
 def _cache_text(cache: Cache) -> str:
+    state: Dict[str, Any] = {
+        "v": RENDER_VERSION,
+        "rows": {k: v.to_json() for k, v in sorted(cache.rows.items())},
+        "pages": dict(sorted(cache.pages.items())),
+        "dbs": dict(sorted(cache.dbs.items())),
+        "problems": list(cache.problems),
+    }
+    if cache.checked:  # absent when empty: older caches stay identical
+        state["checked"] = dict(sorted(cache.checked.items()))
     return json.dumps(
-        {
-            "v": RENDER_VERSION,
-            "rows": {k: v.to_json() for k, v in sorted(cache.rows.items())},
-            "pages": dict(sorted(cache.pages.items())),
-            "dbs": dict(sorted(cache.dbs.items())),
-            "problems": list(cache.problems),
-        },
+        state,
         separators=(",", ":"),
         ensure_ascii=False,
     )
@@ -1031,8 +1047,22 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
                 tables[_bare(db_id)] = (page_id, db_id)
     for db_id, page_id in result.db_pages.items():
         tables[_bare(db_id)] = (page_id, db_id)
-    for source_id in pending[:MAX_ORIGIN_CHECKS]:
+    now = time.time()
+    asked = {**result.previous.checked, **result.checked}
+    # never asked first, then the longest ago; rows asked within the last
+    # day wait, so the same few failing rows can't use up every sync
+    due = sorted(
+        (
+            s
+            for s in pending
+            if now - asked.get(s, 0.0) >= ORIGIN_RECHECK_SECONDS
+        ),
+        key=lambda s: (asked.get(s, 0.0), s),
+    )
+    batch = due[:MAX_ORIGIN_CHECKS]
+    for source_id in batch:
         result.progress("checking unlisted rows")
+        result.checked[source_id] = now  # whatever the answer: asked today
         try:
             row = client.get_page(source_id)
         except NotionError:
@@ -1047,10 +1077,10 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
             result.recovered[source_id] = RowState(
                 "", 0.0, "", known[0], known[1]
             )
-    if len(pending) > MAX_ORIGIN_CHECKS:
+    if len(pending) > len(batch):
         result.warnings.append(
-            f"{len(pending) - MAX_ORIGIN_CHECKS} card(s) of unknown origin "
-            "were kept; "
+            f"{len(pending) - len(batch)} card(s) of unknown origin "
+            "were kept without being checked this time; "
             "they are checked on the next syncs"
         )
 
@@ -1501,10 +1531,13 @@ def _next_cache(result: SyncResult) -> Cache:
         if k not in result.dbs_drop
     }
     dbs.update(result.dbs_out)
+    checked = dict(result.previous.checked)
+    checked.update(result.checked)
     return Cache(
         rows=rows,
         pages=pages,
         dbs=dbs,
         problems=list(result.problems),
+        checked={k: t for k, t in checked.items() if k in remaining},
         raw=result.previous.raw,
     )
