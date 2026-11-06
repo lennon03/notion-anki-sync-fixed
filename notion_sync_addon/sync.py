@@ -39,6 +39,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .htmlify import MediaCollector, render_blocks
 from .notion_api import (
+    BlockSource,
     BlockTree,
     NotionClient,
     NotionError,
@@ -105,6 +106,7 @@ class RowState:
     volatile: bool = False  # content can change without bumping `edited`
 
     def to_json(self) -> list:
+        """Return the compact list stored in the cache file."""
         return [
             self.edited,
             round(self.fetched_at, 1),
@@ -116,6 +118,7 @@ class RowState:
 
     @classmethod
     def from_json(cls, value: Any) -> Optional["RowState"]:
+        """Parse ``to_json``'s output; None if it isn't valid."""
         if not isinstance(value, list) or len(value) != 6:
             return None
         try:
@@ -133,6 +136,8 @@ class RowState:
 
 @dataclass
 class Cache:
+    """The cache file's content (see the comment on RENDER_VERSION)."""
+
     rows: Dict[str, RowState] = field(default_factory=dict)
     pages: Dict[str, list] = field(default_factory=dict)
     dbs: Dict[str, str] = field(default_factory=dict)
@@ -142,6 +147,8 @@ class Cache:
 
 @dataclass
 class RowCard:
+    """One Notion row, to become one note."""
+
     source_id: str
     front: str
     back_html: str  # may contain @@NSMEDIA:*@@ placeholders
@@ -151,6 +158,8 @@ class RowCard:
 
 @dataclass
 class TableData:
+    """One Notion table (a subdeck) and its rows."""
+
     title: str
     rows: List[RowCard] = field(default_factory=list)
     db_id: str = ""
@@ -159,6 +168,8 @@ class TableData:
 
 @dataclass
 class PageData:
+    """One configured Notion page (a deck) and its tables."""
+
     title: str
     deck_name: str
     tables: List[TableData] = field(default_factory=list)
@@ -166,7 +177,7 @@ class PageData:
 
 @dataclass
 class Prepared:
-    """Output of ``prepare_sync``: the cache, checked against the collection."""
+    """Output of ``prepare_sync``: the cache checked against the notes."""
 
     known: Dict[str, RowState]
     structure: Dict[str, dict]
@@ -175,6 +186,8 @@ class Prepared:
 
 
 class SyncResult:
+    """Everything read from Notion, plus what apply_sync needs to know."""
+
     def __init__(self):
         self.pages: List[PageData] = []
         self.config: dict = {}
@@ -231,6 +244,7 @@ class SyncResult:
         self.progress: Progress = _no_progress
 
     def cleanup(self) -> None:
+        """Delete the downloaded media files."""
         if self.media_dir:
             shutil.rmtree(self.media_dir, ignore_errors=True)
 
@@ -267,10 +281,10 @@ def resolve_token(cfg: Optional[dict]) -> str:
     if val:
         return val
     try:
-        from aqt import mw  # type: ignore  # noqa: F401
+        from aqt import mw  # noqa: F401
 
         addon_dir = os.path.dirname(os.path.abspath(__file__))
-        bases = (
+        bases: Tuple[str, ...] = (
             os.path.join(addon_dir, "user_files"),
             addon_dir,
             os.getcwd(),
@@ -333,6 +347,7 @@ def canonical_page_id(raw: str) -> str:
 
 
 def deck_safe(name: str) -> str:
+    """Turn a Notion title into a valid Anki deck name component."""
     name = re.sub(r"\s+", " ", name).strip()
     name = name.replace("::", "/")  # protect path separator first
     name = re.sub(r"[\x00:\"]", " ", name)  # drop any other illegal chars
@@ -383,7 +398,7 @@ def is_unchanged(
     key: str = "",
     now: Optional[float] = None,
 ) -> bool:
-    """True when the cached content is still what Notion has for this row.
+    """Tell whether the cached content is still what Notion has.
 
     A volatile row (page mentions, synced block copies) can change without
     its last_edited_time moving, so it is only trusted for an hour.
@@ -511,6 +526,7 @@ def save_cache(path: str, cache: Cache) -> bool:
 
 
 def fingerprint(front: str, back: str) -> str:
+    """Return a short hash of a note's Front and Back."""
     return hashlib.sha1(f"{front}\x1f{back}".encode("utf-8")).hexdigest()[:16]
 
 
@@ -557,7 +573,7 @@ def synced_notes(col) -> Dict[str, List[Tuple[int, str]]]:
 def trusted_rows(
     cache: Cache, notes: Dict[str, List[Tuple[int, str]]]
 ) -> Dict[str, RowState]:
-    """Cached rows whose note still holds exactly what the add-on wrote.
+    """Return the cached rows whose note holds what the add-on wrote.
 
     Anything else (note deleted, edited in Anki, undone, changed by another
     device) is downloaded again and overwritten with Notion's content.
@@ -583,21 +599,25 @@ def prepare_sync(col, path: str, full: bool = False) -> Prepared:
             known={}, structure={}, previous=previous, sources=set(notes)
         )
     known = trusted_rows(previous, notes)
-    structure = {"pages": dict(previous.pages), "dbs": dict(previous.dbs)}
+    structure: Dict[str, dict] = {
+        "pages": dict(previous.pages),
+        "dbs": dict(previous.dbs),
+    }
     return Prepared(
         known=known, structure=structure, previous=previous, sources=set(notes)
     )
 
 
 def load_problems(path: str) -> List[str]:
-    """What the last sync could not read (for the settings dialog)."""
+    """Return what the last sync could not read (for the dialog)."""
     return list(load_cache(path).problems)
 
 
 def _drop_legacy_state(col, before_change: Callable[[], None]) -> None:
     """Older versions kept the cache in the collection config, which is
     sent to AnkiWeb on every sync: remove it once. Removing config is always
-    undoable in Anki, so it joins the sync's own undo step."""
+    undoable in Anki, so it joins the sync's own undo step.
+    """
     try:
         if col.get_config(LEGACY_STATE_KEY, None) is None:
             return
@@ -627,7 +647,8 @@ def fetch_pages(
     used to scope note removal when part of Notion can't be read.
     ``sources`` are the Sources of the synced notes in the collection: when
     part of Notion can't be read, unlisted ones of unknown origin are
-    looked up so they can be removed or kept for certain."""
+    looked up so they can be removed or kept for certain.
+    """
     client = NotionClient(resolve_token(cfg))
     tree = BlockTree(client)
     media = MediaCollector()
@@ -695,7 +716,7 @@ def _reason(error: NotionError) -> str:
 def _fetch_page(
     page_id: str,
     client: NotionClient,
-    tree: BlockTree,
+    tree: BlockSource,
     media: MediaCollector,
     result: SyncResult,
 ) -> None:
@@ -748,7 +769,7 @@ def _fetch_page(
 def _collect_page_children(
     page_id: str,
     client: NotionClient,
-    tree: BlockTree,
+    tree: BlockSource,
     media: MediaCollector,
     data: PageData,
     result: SyncResult,
@@ -779,7 +800,8 @@ def _collect_page_children(
 
 class _RecordingTree:
     """Passes children() through and notes content that can change in
-    Notion without bumping the row's last_edited_time."""
+    Notion without bumping the row's last_edited_time.
+    """
 
     def __init__(self, tree: Any) -> None:
         self.tree = tree
@@ -826,7 +848,7 @@ def _is_volatile(block: dict) -> bool:
 def _resolve_table(
     client: NotionClient, db_id: str, block_title: str
 ) -> Tuple[str, str]:
-    """(data source id, title) of a database."""
+    """Look up a database's data source id and title."""
     db = client.get_database(db_id)
     ds = data_source_of(db) or {}
     title = (
@@ -840,7 +862,7 @@ def _resolve_table(
 
 def _fetch_table(
     client: NotionClient,
-    tree: BlockTree,
+    tree: BlockSource,
     db_block: dict,
     media: MediaCollector,
     parent_deck: str,
@@ -876,10 +898,10 @@ def _fetch_table(
     try:
         # one cheap metadata query per 100 rows; every row carries its
         # built-in last_edited_time, no table property is needed
-        rows: Optional[List[dict]] = client.query_data_source(ds_id)
+        rows = client.query_data_source(ds_id)
     except NotionError as e:
         error = e
-        rows = None
+        retried: Optional[List[dict]] = None
         if cached_ds and not getattr(e, "transient", False):
             # Notion rejected the remembered data source (deleted or
             # replaced): look the database up again, once
@@ -889,10 +911,10 @@ def _fetch_table(
                 table.title, table.raw_title = deck_safe(title), title
                 if fresh_ds != ds_id:
                     ds_id = fresh_ds
-                    rows = client.query_data_source(ds_id)
+                    retried = client.query_data_source(ds_id)
             except NotionError as again:
                 error = again
-        if rows is None:
+        if retried is None:
             _fail(
                 result,
                 f"Table '{title}': {error}",
@@ -901,6 +923,7 @@ def _fetch_table(
                 f"Table '{title}'{where}: {_reason(error)}",
             )
             return table
+        rows = retried
     result.dbs_out[db_id] = ds_id
 
     now = time.time()
@@ -982,8 +1005,9 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
     """Look up synced notes that no table listed and whose origin is unknown.
 
     Only runs when part of Notion could not be read: such a note may belong
-    to the part that failed, so it would be kept. Notion answers for the row itself: a row in the trash
-    is gone for certain (its note can go); a row that exists keeps its note
+    to the part that failed, so it would be kept. Notion answers for the
+    row itself: a row in the trash is gone for certain (its note can go);
+    a row that exists keeps its note
     and, when its table belongs to a configured page, the origin is
     remembered so the next sync doesn't need to ask again. Any error (the
     row may just not be shared) keeps the note.
@@ -1025,7 +1049,8 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
             )
     if len(pending) > MAX_ORIGIN_CHECKS:
         result.warnings.append(
-            f"{len(pending) - MAX_ORIGIN_CHECKS} card(s) of unknown origin were kept; "
+            f"{len(pending) - MAX_ORIGIN_CHECKS} card(s) of unknown origin "
+            "were kept; "
             "they are checked on the next syncs"
         )
 
@@ -1046,7 +1071,10 @@ def _download_media(
     media_dir: str,
     progress: Progress = _no_progress,
 ) -> Tuple[List[Tuple[str, str]], Set[str]]:
-    """Download every collected file: (downloaded (path, fname), failed fnames)."""
+    """Download every collected file.
+
+    Returns (downloaded (path, fname) pairs, names that failed).
+    """
     out: List[Tuple[str, str]] = []
     failed: Set[str] = set()
     total = len(media.files)
@@ -1074,11 +1102,12 @@ _PLACEHOLDER = re.compile(r"@@NSMEDIA:([A-Za-z0-9_.\-]+)@@")
 
 
 def _forget_rows_with_failed_media(result: SyncResult) -> None:
-    """A row whose media could not be downloaded is still written (its text
+    """Write rows whose media failed, but don't cache them (their text
     is current), but not cached, so the next sync downloads it again.
 
     This does not make the sync incomplete: which rows exist in Notion is
-    known, so removing deleted rows stays safe."""
+    known, so removing deleted rows stays safe.
+    """
     if not result.failed_media:
         return
     names = sorted(result.failed_media)
@@ -1183,7 +1212,8 @@ class _UndoStep:
 
     Anki keeps about 30 undo steps and every note change is one, so changes
     are folded into the entry as they go: otherwise a sync with many changes
-    pushes the entry out of the queue and it can no longer be merged."""
+    pushes the entry out of the queue and it can no longer be merged.
+    """
 
     MERGE_EVERY = 10  # begin() calls; each covers at most 2-3 backend ops
 
@@ -1212,7 +1242,7 @@ class _UndoStep:
 
 
 def _media_present(col) -> Tuple[str, Set[str]]:
-    """The media folder and the exact names of the files in it."""
+    """Return the media folder and the exact names of its files."""
     try:
         folder = col.media.dir()
         return folder, set(os.listdir(folder))
@@ -1235,7 +1265,8 @@ def _import_media(col, result: SyncResult) -> Dict[str, str]:
     A re-downloaded file already in the media folder under exactly its name
     and with the same bytes is not handed to Anki again: that is what Anki
     would conclude too, after hashing and rewriting it while the
-    collection is held."""
+    collection is held.
+    """
     imported_names: Dict[str, str] = {}
     folder, present = (
         _media_present(col) if result.media_files else ("", set())
@@ -1280,9 +1311,12 @@ def apply_sync(
 
 
 def _save_cache_quietly(result: SyncResult) -> None:
-    """The notes are written at this point: a cache file that can't be
+    """Save the cache; failing is a warning, the notes are written.
+
+    A cache file that can't be
     written (antivirus or OneDrive holding it, disk full) only costs extra
-    downloads next time, so it is a warning, not a failed sync."""
+    downloads next time, so it is a warning, not a failed sync.
+    """
     cache = _next_cache(result)
     for attempt in range(2):
         try:
@@ -1291,7 +1325,8 @@ def _save_cache_quietly(result: SyncResult) -> None:
         except OSError as e:
             if attempt:
                 result.warnings.append(
-                    f"Could not save the sync cache ({e}); the cards are up to date, "
+                    f"Could not save the sync cache ({e}); "
+                    "the cards are up to date, "
                     "the next sync just downloads more rows"
                 )
             else:
@@ -1299,9 +1334,8 @@ def _save_cache_quietly(result: SyncResult) -> None:
 
 
 def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
-    from anki.notes import (  # local import: keep module import cheap at startup
-        Note,
-    )
+    # local import: keep the module cheap to import at startup
+    from anki.notes import Note
 
     stats = {
         "added": 0,
@@ -1386,12 +1420,14 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
 
 
 def get_or_create_deck(col, name: str) -> int:
+    """Return the id of deck ``name``, creating it if needed."""
     return col.decks.id(name, create=True)
 
 
 def _removal_blocked(source_id: str, result: SyncResult) -> bool:
     """Keep a note whose row may still exist in a part of Notion that could
-    not be read in this sync."""
+    not be read in this sync.
+    """
     if source_id in result.confirmed_gone:  # Notion says it's in the trash
         return False
     origin = _origin(source_id, result)
@@ -1422,7 +1458,8 @@ def _remove_obsolete(
 ) -> Tuple[int, Set[str]]:
     """Remove stale synced notes and duplicates: (notes removed, Sources
     left with no note). Notes not made by the add-on never appear in
-    ``notes`` and are never touched."""
+    ``notes`` and are never touched.
+    """
     to_remove: List[int] = []
     gone: Set[str] = set()
     for source_id, entries in notes.items():
@@ -1440,8 +1477,11 @@ def _remove_obsolete(
 
 
 def _next_cache(result: SyncResult) -> Cache:
-    """The cache after this sync. Rows kept although Notion didn't list them
-    (their page/table could not be read) keep their old entry."""
+    """Build the cache after this sync.
+
+    Rows kept although Notion didn't list them
+    (their page/table could not be read) keep their old entry.
+    """
     rows = dict(result.fetched)
     remaining = (
         result.sources_after if result.sources_after is not None else set(rows)

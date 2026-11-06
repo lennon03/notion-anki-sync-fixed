@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
+from types import SimpleNamespace
+from typing import Any, Dict, List, cast
 
 import pytest
 
@@ -305,13 +307,15 @@ def _rt(text):
 def test_canonical_id_and_deck_names():
     assert (
         canonical_page_id(
-            "https://app.notion.com/p/Philo-Histoire-1bbf4336b2b480f4a0b6fc07ce4ee5e4"
+            "https://app.notion.com/p/Philo-Histoire-"
+            "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
         )
         == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
     )
     assert (
         canonical_page_id(
-            "https://app.notion.com/p/Philo-Histoire-1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4"
+            "https://app.notion.com/p/Philo-Histoire-"
+            "1bbf4336-b2b4-80f4-a0b6-fc07ce4ee5e4"
             "?source=copy_link"
         )
         == "1bbf4336b2b480f4a0b6fc07ce4ee5e4"
@@ -358,8 +362,9 @@ def test_page_children_are_fetched_once():
     tree = CountingTree()
     result = SyncResult()
     data = PageData(title="Page", deck_name="Page")
+    client = cast(NotionClient, None)  # not used: the page has no tables
     _collect_page_children(
-        "page-id", object(), tree, MediaCollector(), data, result
+        "page-id", client, tree, MediaCollector(), data, result
     )
     assert tree.calls == ["page-id"]
 
@@ -439,16 +444,18 @@ def test_empty_cards_are_enabled_by_default():
 
     result = SyncResult()
     result.config = {}
+    client = cast(NotionClient, Client())
     table = _fetch_table(
-        Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result
+        client, Tree(), {"id": "db-1"}, MediaCollector(), "Page", result
     )
     assert table is not None
     assert len(table.rows) == 1
     assert table.rows[0].front == ""
 
     result.config = {"include_empty_cards": False}
+    client = cast(NotionClient, Client())
     table = _fetch_table(
-        Client(), Tree(), {"id": "db-1"}, MediaCollector(), "Page", result
+        client, Tree(), {"id": "db-1"}, MediaCollector(), "Page", result
     )
     assert table is not None
     assert table.rows == []
@@ -573,10 +580,17 @@ def test_unchanged_rows_skip_content_download(frozen_now):
         "bbb": RowState(EDITED, EDITED_TS + 600, "fp"),
     }
     table = _fetch_table(
-        client, Tree(), {"id": "db"}, MediaCollector(), "Page", result, "page"
+        cast(NotionClient, client),
+        Tree(),
+        {"id": "db"},
+        MediaCollector(),
+        "Page",
+        result,
+        "page",
     )
 
     assert fetched == ["bbb"]  # only the edited row is downloaded
+    assert table is not None
     by_id = {r.source_id: r for r in table.rows}
     assert by_id["aaa"].unchanged and by_id["aaa"].back_html == ""
     assert not by_id["bbb"].unchanged and "body" in by_id["bbb"].back_html
@@ -599,13 +613,16 @@ def test_failed_table_query_marks_result_incomplete():
             raise NotionError("boom")
 
     result = SyncResult()
+    client = cast(NotionClient, Client([]))
     _fetch_table(
-        Client([]), FakeTree(), {"id": "db"}, MediaCollector(), "Page", result
+        client, FakeTree(), {"id": "db"}, MediaCollector(), "Page", result
     )
     assert result.incomplete  # apply_sync then skips removing notes
 
 
-def test_unchanged_page_reuses_table_list_and_data_source(frozen_now):
+def test_unchanged_page_reuses_table_list_and_data_source(
+    frozen_now, monkeypatch
+):
     from notion_sync_addon.sync import fetch_pages
 
     calls = []
@@ -645,28 +662,24 @@ def test_unchanged_page_reuses_table_list_and_data_source(frozen_now):
     import notion_sync_addon.sync as sync_mod
 
     page_id = "1f2e3d4c5b6a79881726354433221100"
-    orig_client, orig_tree = sync_mod.NotionClient, sync_mod.BlockTree
-    sync_mod.NotionClient = lambda token: Client()
-    sync_mod.BlockTree = lambda client: Tree()
-    try:
-        cfg = {"notion_token": "t", "notion_pages": [page_id]}
-        first = fetch_pages(cfg)
-        assert calls == ["page", "blocks", "database", "query:ds-1"]
-        structure = {
-            "pages": dict(first.pages_out),
-            "dbs": dict(first.dbs_out),
-        }
-        # pretend the first fetch happened well after the page's last edit
-        structure["pages"][page_id][1] = EDITED_TS + 600
-        calls.clear()
-        second = fetch_pages(cfg, {}, None, structure)
-        # no block walk, no database lookup: just the page and the row query
-        assert calls == ["page", "query:ds-1"]
-        assert [t.title for p in second.pages for t in p.tables] == ["Defs"]
-        first.cleanup()
-        second.cleanup()
-    finally:
-        sync_mod.NotionClient, sync_mod.BlockTree = orig_client, orig_tree
+    monkeypatch.setattr(sync_mod, "NotionClient", lambda token: Client())
+    monkeypatch.setattr(sync_mod, "BlockTree", lambda client: Tree())
+    cfg = {"notion_token": "t", "notion_pages": [page_id]}
+    first = fetch_pages(cfg)
+    assert calls == ["page", "blocks", "database", "query:ds-1"]
+    structure: Dict[str, dict] = {
+        "pages": dict(first.pages_out),
+        "dbs": dict(first.dbs_out),
+    }
+    # pretend the first fetch happened well after the page's last edit
+    structure["pages"][page_id][1] = EDITED_TS + 600
+    calls.clear()
+    second = fetch_pages(cfg, {}, None, structure)
+    # no block walk, no database lookup: just the page and the row query
+    assert calls == ["page", "query:ds-1"]
+    assert [t.title for p in second.pages for t in p.tables] == ["Defs"]
+    first.cleanup()
+    second.cleanup()
 
 
 # --------------------------------------------------------------------- #
@@ -984,10 +997,7 @@ def env(tmp_path, monkeypatch):
     col = collection.Collection(str(tmp_path / "col.anki2"))
     path = str(tmp_path / "user_files" / "cache.json")
 
-    class Env:
-        pass
-
-    e = Env()
+    e: Any = SimpleNamespace()
     e.col, e.notion, e.path, e.sync_mod = col, notion, path, sync_mod
     e.cfg = {"notion_token": "t", "notion_pages": [P1, P2]}
 
@@ -1038,7 +1048,7 @@ def test_first_sync_then_noop_is_cached_and_not_undoable(env):
 
 
 def test_large_sync_is_still_one_undo_step(env):
-    """Anki keeps ~30 undo steps; 100 note changes must still merge into one."""
+    """Anki keeps ~30 undo steps; 100 note changes still make one."""
     env.notion.tables[DB1]["rows"].update(
         {_rid(100 + i): [f"x{i}", OLD, [_para(f"x {i}")]] for i in range(100)}
     )
@@ -1340,7 +1350,8 @@ def addon(env, monkeypatch, tmp_path):
 
     class FakeQueryOp:
         def __init__(self, *, parent, op, success):
-            self.op, self.success, self.fail = op, success, None
+            self.op, self.success = op, success
+            self.fail: Any = None
 
         def failure(self, fn):
             self.fail = fn
@@ -1357,9 +1368,9 @@ def addon(env, monkeypatch, tmp_path):
                 return
             self.success(value)
 
-    shown = []
-    finished = []
-    statuses = []
+    shown: List[str] = []
+    finished: List[Any] = []
+    statuses: List[Any] = []
     monkeypatch.setattr(addon_mod, "mw", FakeMw(), raising=False)
     monkeypatch.setattr(addon_mod, "QueryOp", FakeQueryOp, raising=False)
     monkeypatch.setattr(
@@ -1373,11 +1384,12 @@ def addon(env, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(addon_mod, "_op_finished", finished.append)
     real_set_status = addon_mod._set_status
-    monkeypatch.setattr(
-        addon_mod,
-        "_set_status",
-        lambda text=None: (statuses.append(text), real_set_status(text)),
-    )
+
+    def set_status(text=None):
+        statuses.append(text)
+        real_set_status(text)
+
+    monkeypatch.setattr(addon_mod, "_set_status", set_status)
     monkeypatch.setattr(addon_mod, "ADDON_DIR", str(tmp_path / "addon"))
     monkeypatch.setitem(addon_mod._state, "busy", False)
     for key in (
@@ -1388,10 +1400,7 @@ def addon(env, monkeypatch, tmp_path):
     ):
         monkeypatch.setitem(addon_mod._state, key, False)
 
-    class A:
-        pass
-
-    a = A()
+    a: Any = SimpleNamespace()
     a.mod, a.mw, a.shown, a.finished, a.statuses, a.queue = (
         addon_mod,
         FakeMw,
@@ -1511,15 +1520,15 @@ def test_sync_error_probe_flags_failure(monkeypatch):
 
     fake = types.ModuleType("aqt.sync")
     calls = []
-    fake.handle_sync_error = lambda mw, err: calls.append(err)
+    setattr(fake, "handle_sync_error", lambda mw, err: calls.append(err))
     pkg = types.ModuleType("aqt")
-    pkg.sync = fake
+    setattr(pkg, "sync", fake)
     monkeypatch.setitem(__import__("sys").modules, "aqt", pkg)
     monkeypatch.setitem(__import__("sys").modules, "aqt.sync", fake)
     monkeypatch.setitem(addon_mod._state, "ankiweb_failed", False)
     addon_mod._install_sync_error_probe()
     addon_mod._install_sync_error_probe()  # idempotent
-    fake.handle_sync_error(None, "network down")
+    getattr(fake, "handle_sync_error")(None, "network down")
     assert calls == ["network down"] and addon_mod._state["ankiweb_failed"]
 
 
@@ -1614,7 +1623,7 @@ def test_cache_of_another_render_version_keeps_row_origins(tmp_path):
 
 
 def test_replaced_data_source_is_looked_up_again(env):
-    """N2: a remembered data source id that Notion rejects is resolved again."""
+    """N2: a remembered data source id that Notion rejects is renewed."""
     env.sync()
     env.notion.ds[DB1] = "ds-new-" + DB1  # the old one now answers 404
     env.notion.tables[DB1]["rows"][_rid(5)] = ["h5", OLD, [_para("new row")]]
@@ -1935,7 +1944,7 @@ def test_missing_sync_error_hook_never_uploads_after_a_failed_status(
     import types
 
     fake = types.ModuleType("aqt.sync")
-    statuses = []
+    statuses: List[int] = []
 
     class Status:
         NO_CHANGES, NORMAL_SYNC, FULL_SYNC = 0, 1, 2
@@ -1943,9 +1952,13 @@ def test_missing_sync_error_hook_never_uploads_after_a_failed_status(
         def __init__(self, required):
             self.required = required
 
-    fake.get_sync_status = lambda mw, cb: [cb(Status(s)) for s in statuses]
+    setattr(
+        fake,
+        "get_sync_status",
+        lambda mw, cb: [cb(Status(s)) for s in statuses],
+    )
     pkg = types.ModuleType("aqt")
-    pkg.sync = fake
+    setattr(pkg, "sync", fake)
     monkeypatch.setitem(sys.modules, "aqt", pkg)
     monkeypatch.setitem(sys.modules, "aqt.sync", fake)
     addon.mod._install_sync_error_probe()
@@ -1968,7 +1981,7 @@ def test_missing_sync_error_hook_never_uploads_after_a_failed_status(
 # --------------------------------------------------------------------- #
 
 
-_QAPP = []  # like Anki's, the test QApplication lives until the end
+_QAPP: List[Any] = []  # like Anki's, the test QApplication lives until the end
 
 
 @pytest.fixture

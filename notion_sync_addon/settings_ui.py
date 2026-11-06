@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, cast
 
 try:
     from aqt.qt import (
@@ -46,7 +46,7 @@ try:
         pyqtSignal,
     )
 except ImportError:  # standalone preview
-    from PyQt6.QtCore import (  # type: ignore[no-redef]
+    from PyQt6.QtCore import (  # type: ignore[no-redef,unused-ignore]
         QObject,
         QRectF,
         QSize,
@@ -55,7 +55,7 @@ except ImportError:  # standalone preview
         QVariantAnimation,
         pyqtSignal,
     )
-    from PyQt6.QtGui import (  # type: ignore[no-redef]
+    from PyQt6.QtGui import (  # type: ignore[no-redef,unused-ignore]
         QColor,
         QDesktopServices,
         QFont,
@@ -65,7 +65,7 @@ except ImportError:  # standalone preview
         QPalette,
         QPixmap,
     )
-    from PyQt6.QtWidgets import (  # type: ignore[no-redef]
+    from PyQt6.QtWidgets import (  # type: ignore[no-redef,unused-ignore]
         QAbstractButton,
         QDialog,
         QFrame,
@@ -151,6 +151,7 @@ P = dict(LIGHT)
 
 
 def use_theme(dark: bool) -> None:
+    """Switch the palette ``P`` to the dark or light Ocean colors."""
     P.clear()
     P.update(DARK if dark else LIGHT)
 
@@ -172,15 +173,27 @@ MONO_STACK = (
 
 
 def build_stylesheet(p: dict) -> str:
+    """Return the dialog's Qt stylesheet for palette ``p``."""
     return f"""
 QDialog#notionSyncSettings {{ background: {p['BACKGROUND']}; }}
 * {{ font-family: {FONT_STACK}; }}
-QLabel, QLineEdit, QSpinBox, QPushButton, QToolButton {{ color: {p['FOREGROUND']}; }}
+QLabel, QLineEdit, QSpinBox, QPushButton, QToolButton {{
+    color: {p['FOREGROUND']};
+}}
 QLabel {{ font-size: 14px; }}
-QWidget#body, QScrollArea, QScrollArea > QWidget > QWidget {{ background: {p['BACKGROUND']}; border: 0; }}
+QWidget#body, QScrollArea, QScrollArea > QWidget > QWidget {{
+    background: {p['BACKGROUND']};
+    border: 0;
+}}
 
-QFrame#header {{ background: {p['BACKGROUND']}; border-bottom: 1px solid {p['BORDER']}; }}
-QFrame#footer {{ background: {p['BACKGROUND']}; border-top: 1px solid {p['BORDER']}; }}
+QFrame#header {{
+    background: {p['BACKGROUND']};
+    border-bottom: 1px solid {p['BORDER']};
+}}
+QFrame#footer {{
+    background: {p['BACKGROUND']};
+    border-top: 1px solid {p['BORDER']};
+}}
 QLabel#crumbMuted {{ color: {p['MUTED_FOREGROUND']}; }}
 QLabel#crumbSep {{ color: {p['MUTED_FOREGROUND']}; padding: 0 2px; }}
 QLabel#crumb {{ color: {p['FOREGROUND']}; font-weight: 500; }}
@@ -188,22 +201,39 @@ QLabel#crumb {{ color: {p['FOREGROUND']}; font-weight: 500; }}
 QLabel#sectionTitle {{ font-size: 16px; font-weight: 600; }}
 QLabel#sectionCount {{ font-size: 12px; color: {p['MUTED_FOREGROUND']}; }}
 QLabel#rowTitle {{ font-size: 14px; font-weight: 500; }}
-QLabel#rowDesc, QLabel#footerStatus {{ font-size: 12px; color: {p['MUTED_FOREGROUND']}; }}
-QLabel#pageId {{ font-family: {MONO_STACK}; font-size: 11px; color: {p['MUTED_FOREGROUND']}; }}
+QLabel#rowDesc, QLabel#footerStatus {{
+    font-size: 12px;
+    color: {p['MUTED_FOREGROUND']};
+}}
+QLabel#pageId {{
+    font-family: {MONO_STACK};
+    font-size: 11px;
+    color: {p['MUTED_FOREGROUND']};
+}}
 QLabel#pageName {{ font-size: 14px; font-weight: 500; }}
-QLabel#pageName[pending="true"] {{ color: {p['MUTED_FOREGROUND']}; font-weight: 400; }}
+QLabel#pageName[pending="true"] {{
+    color: {p['MUTED_FOREGROUND']};
+    font-weight: 400;
+}}
 QLabel#errorText {{ font-size: 12px; color: {p['DESTRUCTIVE_FOREGROUND']}; }}
 QLabel#problemItem {{ font-size: 12px; color: {p['FOREGROUND']}; }}
 QLabel#emptyText {{ font-size: 13px; color: {p['MUTED_FOREGROUND']}; }}
 
 QFrame#card {{
-    background: {p['CARD']}; border: 1px solid {p['CARD_BORDER']}; border-radius: 12px;
+    background: {p['CARD']};
+    border: 1px solid {p['CARD_BORDER']};
+    border-radius: 12px;
 }}
 QFrame#warnCard {{
-    background: {p['CARD']}; border: 1px solid {p['INVALID_BORDER']}; border-radius: 12px;
+    background: {p['CARD']};
+    border: 1px solid {p['INVALID_BORDER']};
+    border-radius: 12px;
 }}
 QFrame#row {{ background: transparent; border: 0; }}
-QFrame#row[divider="true"] {{ border-top: 1px solid {p['CARD_BORDER']}; border-radius: 0; }}
+QFrame#row[divider="true"] {{
+    border-top: 1px solid {p['CARD_BORDER']};
+    border-radius: 0;
+}}
 
 /* ---- buttons (button.tsx) ---- */
 QPushButton, QToolButton#ghostIcon {{
@@ -211,22 +241,35 @@ QPushButton, QToolButton#ghostIcon {{
     border-radius: 8px; min-height: 30px; padding: 0 11px;
 }}
 QPushButton {{
-    background: {p['POPOVER']}; border: 1px solid {p['INPUT']}; color: {p['FOREGROUND']};
+    background: {p['POPOVER']};
+    border: 1px solid {p['INPUT']};
+    color: {p['FOREGROUND']};
 }}
 QPushButton:hover {{ background: {p['OUTLINE_HOVER']}; }}
 QPushButton:pressed {{ background: {p['ACCENT']}; }}
 QPushButton:focus {{ border-color: {p['RING']}; }}
-QPushButton:disabled {{ color: {p['DISABLED_TEXT']}; border-color: {p['DISABLED_BORDER']}; background: {p['DISABLED_BG']}; }}
+QPushButton:disabled {{
+    color: {p['DISABLED_TEXT']};
+    border-color: {p['DISABLED_BORDER']};
+    background: {p['DISABLED_BG']};
+}}
 
 QPushButton#primary {{
-    background: {p['PRIMARY']}; border: 1px solid {p['PRIMARY']}; color: {p['PRIMARY_FOREGROUND']};
+    background: {p['PRIMARY']};
+    border: 1px solid {p['PRIMARY']};
+    color: {p['PRIMARY_FOREGROUND']};
 }}
-QPushButton#primary:hover {{ background: {p['PRIMARY_HOVER']}; border-color: {p['PRIMARY_HOVER']}; }}
+QPushButton#primary:hover {{
+    background: {p['PRIMARY_HOVER']};
+    border-color: {p['PRIMARY_HOVER']};
+}}
 QPushButton#primary:pressed {{ background: {p['PRIMARY_PRESSED']}; }}
 QPushButton#primary:focus {{ border-color: {p['RING']}; }}
 
 QPushButton#ghost {{ background: transparent; border: 1px solid transparent; }}
-QPushButton#ghost:hover, QPushButton#ghost:pressed {{ background: {p['ACCENT']}; }}
+QPushButton#ghost:hover, QPushButton#ghost:pressed {{
+    background: {p['ACCENT']};
+}}
 QPushButton#ghost:focus {{ border-color: {p['RING']}; }}
 
 QPushButton#ghostXs {{
@@ -237,29 +280,39 @@ QPushButton#ghostXs:hover {{ background: {p['ACCENT']}; }}
 
 QToolButton#ghostIcon {{
     background: transparent; border: 1px solid transparent;
-    min-height: 26px; min-width: 26px; max-height: 26px; max-width: 26px; padding: 0;
+    min-height: 26px;
+    min-width: 26px;
+    max-height: 26px;
+    max-width: 26px;
+    padding: 0;
 }}
 QToolButton#ghostIcon:hover {{ background: {p['ACCENT']}; }}
 QToolButton#ghostIcon:checked {{ background: {p['ACCENT']}; }}
 
 /* ---- inputs (input.tsx / number-field.tsx) ---- */
 QLineEdit#input {{
-    background: {p['FIELD']}; border: 1px solid {p['INPUT']}; border-radius: 8px;
+    background: {p['FIELD']};
+    border: 1px solid {p['INPUT']};
+    border-radius: 8px;
     min-height: 30px; padding: 0 11px; font-size: 14px;
-    selection-background-color: {p['PRIMARY']}; selection-color: {p['PRIMARY_FOREGROUND']};
+    selection-background-color: {p['PRIMARY']};
+    selection-color: {p['PRIMARY_FOREGROUND']};
 }}
 QLineEdit#input:focus {{ border-color: {p['RING']}; }}
 QLineEdit#input[invalid="true"] {{ border-color: {p['INVALID_BORDER']}; }}
 
 QFrame#numberField {{
-    background: {p['FIELD']}; border: 1px solid {p['INPUT']}; border-radius: 8px;
+    background: {p['FIELD']};
+    border: 1px solid {p['INPUT']};
+    border-radius: 8px;
 }}
 QFrame#numberField[focused="true"] {{ border-color: {p['RING']}; }}
 QFrame#numberField QSpinBox {{
     background: transparent; border: 0; padding: 0; min-height: 30px;
     font-size: 14px; selection-background-color: {p['PRIMARY']};
 }}
-QFrame#numberField QSpinBox::up-button, QFrame#numberField QSpinBox::down-button {{
+QFrame#numberField QSpinBox::up-button,
+QFrame#numberField QSpinBox::down-button {{
     width: 0; height: 0; border: 0; subcontrol-origin: border;
 }}
 QToolButton#stepperLeft {{
@@ -275,13 +328,19 @@ QToolButton#stepperRight:hover {{ background: {p['ACCENT']}; }}
 
 /* ---- scrollbars ---- */
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
-QScrollBar::handle:vertical {{ background: {p['INPUT']}; border-radius: 3px; min-height: 32px; }}
+QScrollBar::handle:vertical {{
+    background: {p['INPUT']};
+    border-radius: 3px;
+    min-height: 32px;
+}}
 QScrollBar::handle:vertical:hover {{ background: {p['SCROLL_HOVER']}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
 QToolTip {{
-    background: {p['POPOVER']}; color: {p['FOREGROUND']}; border: 1px solid {p['BORDER']};
+    background: {p['POPOVER']};
+    color: {p['FOREGROUND']};
+    border: 1px solid {p['BORDER']};
     padding: 4px 8px; font-size: 12px;
 }}
 """
@@ -292,25 +351,34 @@ QToolTip {{
 # --------------------------------------------------------------------- #
 
 _ICONS = {
-    "eye": '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 '
-    '1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>',
-    "eye-off": '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 '
-    '10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/>'
+    "eye": '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 '
+    '0 '
+    '1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" '
+    'r="3"/>',
+    "eye-off": '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 '
+    '0 1 0 .696 '
+    '10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 '
+    '1-4.242-4.242"/>'
     '<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 '
     '10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>',
-    "trash": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>'
+    "trash": '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 '
+    '0-2-1-2-2V6"/>'
     '<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
     "plus": '<path d="M5 12h14"/><path d="M12 5v14"/>',
     "minus": '<path d="M5 12h14"/>',
     "refresh": '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>'
-    '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>'
+    '<path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 '
+    '1-6.74-2.74L3 16"/>'
     '<path d="M8 16H3v5"/>',
-    "file": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>'
-    '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/>'
+    "file": '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 '
+    '2-2V7Z"/>'
+    '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 '
+    '13H8"/>'
     '<path d="M16 17H8"/>',
     "external": '<path d="M15 3h6v6"/><path d="M10 14 21 3"/>'
     '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
-    "alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 '
+    "alert": '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 '
+    '21h16a2 2 0 0 0 '
     '1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
 }
 
@@ -358,16 +426,18 @@ def set_icon(
     The spec is remembered on the widget so ``refresh_icons`` can redraw it
     in the new palette when Anki switches between light and dark.
     """
-    widget._ns_icon = (name, role, size)  # type: ignore[attr-defined]
+    setattr(widget, "_ns_icon", (name, role, size))
     rendered = icon(name, P[role], size)
     if isinstance(widget, QLabel):
         widget.setPixmap(rendered.pixmap(QSize(size, size)))
-    else:
-        widget.setIcon(rendered)  # type: ignore[attr-defined]
-        widget.setIconSize(QSize(size, size))  # type: ignore[attr-defined]
+    else:  # a QPushButton or QToolButton
+        btn = cast(QAbstractButton, widget)
+        btn.setIcon(rendered)
+        btn.setIconSize(QSize(size, size))
 
 
 def refresh_icons(root: QWidget) -> None:
+    """Redraw every icon under ``root`` in the current palette."""
     for widget in root.findChildren(QWidget):
         spec = getattr(widget, "_ns_icon", None)
         if spec:
@@ -385,7 +455,7 @@ def _repolish(widget: QWidget) -> None:
 
 
 class Switch(QAbstractButton):
-    """switch.tsx: 30x18 track, 14px thumb, primary when checked, input when off."""
+    """switch.tsx: 30x18 track, 14px thumb; primary when on, input when off."""
 
     TRACK_W, TRACK_H, THUMB = 30, 18, 14
 
@@ -414,9 +484,11 @@ class Switch(QAbstractButton):
         self._anim.start()
 
     def sizeHint(self) -> QSize:
+        """Return the fixed track size."""
         return QSize(self.TRACK_W, self.TRACK_H)
 
     def paintEvent(self, _event) -> None:
+        """Paint the track, focus ring and thumb."""
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         off, on = QColor(P["INPUT"]), QColor(P["PRIMARY"])
@@ -498,9 +570,8 @@ class NumberField(QFrame):
         lay.addWidget(inc)
         self.setFixedWidth(150)
 
-    def eventFilter(
-        self, obj, event
-    ) -> bool:  # focus ring follows the inner spinbox
+    def eventFilter(self, obj, event) -> bool:
+        """Show the focus ring while the inner spin box has focus."""
         if obj is self.spin and event.type() in (
             event.Type.FocusIn,
             event.Type.FocusOut,
@@ -510,10 +581,12 @@ class NumberField(QFrame):
         return False
 
     def value(self) -> int:
+        """Return the current value."""
         return self.spin.value()
 
 
 def text_input(placeholder: str = "", text: str = "") -> QLineEdit:
+    """Create an input.tsx text field."""
     edit = QLineEdit(text)
     edit.setObjectName("input")
     edit.setPlaceholderText(placeholder)
@@ -522,6 +595,7 @@ def text_input(placeholder: str = "", text: str = "") -> QLineEdit:
 
 
 def style_placeholder(edit: QLineEdit) -> None:
+    """Color the placeholder text from the current palette."""
     pal = edit.palette()
     pal.setColor(QPalette.ColorRole.PlaceholderText, QColor(P["PLACEHOLDER"]))
     edit.setPalette(pal)
@@ -530,6 +604,7 @@ def style_placeholder(edit: QLineEdit) -> None:
 def button(
     text: str, variant: str = "outline", icon_name: str = ""
 ) -> QPushButton:
+    """Create a button.tsx button: outline, primary, ghost or ghostXs."""
     btn = QPushButton(text)
     if variant != "outline":
         btn.setObjectName(variant)
@@ -545,6 +620,7 @@ def button(
 
 
 def icon_button(icon_name: str, tooltip: str) -> QToolButton:
+    """Create a ghost icon-only button with a tooltip."""
     btn = QToolButton()
     btn.setObjectName("ghostIcon")
     set_icon(btn, icon_name)
@@ -554,6 +630,7 @@ def icon_button(icon_name: str, tooltip: str) -> QToolButton:
 
 
 def label(text: str, name: str) -> QLabel:
+    """Create a label styled by its object name."""
     lbl = QLabel(text)
     lbl.setObjectName(name)
     return lbl
@@ -570,9 +647,11 @@ class Card(QFrame):
         self._lay.setSpacing(0)
 
     def rows(self) -> List[QFrame]:
+        """Return the card's rows, top to bottom."""
         return [self._lay.itemAt(i).widget() for i in range(self._lay.count())]
 
     def add_row(self, row: QFrame, index: int = -1) -> None:
+        """Insert ``row`` (at the end by default)."""
         if index < 0:
             self._lay.addWidget(row)
         else:
@@ -580,6 +659,7 @@ class Card(QFrame):
         self.refresh_dividers()
 
     def refresh_dividers(self) -> None:
+        """Draw a divider above every row but the first."""
         for i, row in enumerate(self.rows()):
             row.setProperty("divider", i > 0)
             _repolish(row)
@@ -633,7 +713,7 @@ _NAME_SIGNALS: List[_NameSignals] = []
 
 
 def _name_signals() -> _NameSignals:
-    """The shared emitter; call on the main thread."""
+    """Return the shared emitter; call on the main thread."""
     if _NAME_SIGNALS:
         try:
             _NAME_SIGNALS[0].objectName()
@@ -647,7 +727,7 @@ def _name_signals() -> _NameSignals:
 class SettingsDialog(QDialog):
     """Notion Sync settings, laid out like a T3 Code settings panel.
 
-    Args:
+    The constructor takes:
         cfg: the add-on config dict.
         canonical_page_id: parses a URL/ID, raising on invalid input.
         lookup_name: (page_id, token) -> page title; called off the UI thread.
@@ -792,7 +872,8 @@ class SettingsDialog(QDialog):
         card.add_row(
             setting_row(
                 "Notion token",
-                "Internal integration secret. Share each page with the integration in Notion.",
+                "Internal integration secret. Share each page with the "
+                "integration in Notion.",
                 below=token_row,
             )
         )
@@ -815,7 +896,8 @@ class SettingsDialog(QDialog):
         card.add_row(
             setting_row(
                 "Auto-sync",
-                "Check Notion on a timer while Anki is open. Set to Off to sync manually.",
+                "Check Notion on a timer while Anki is open. Set to Off to "
+                "sync manually.",
                 control=self.interval,
             )
         )
@@ -823,8 +905,9 @@ class SettingsDialog(QDialog):
         card.add_row(
             setting_row(
                 "Anki's Sync button also syncs Notion",
-                "Pressing Sync in Anki pulls Notion too, so the separate Notion Sync "
-                "button is hidden. New cards are uploaded with a second AnkiWeb sync.",
+                "Pressing Sync in Anki pulls Notion too, so the separate "
+                "Notion Sync button is hidden. New cards are uploaded with a "
+                "second AnkiWeb sync.",
                 control=self.with_ankiweb,
             )
         )
@@ -857,8 +940,8 @@ class SettingsDialog(QDialog):
             label("The last sync couldn't read everything", "rowTitle")
         )
         desc = label(
-            "Cards from these parts are kept as they are. Cards deleted there in "
-            "Notion are removed once a sync can read them again.",
+            "Cards from these parts are kept as they are. Cards deleted "
+            "there in Notion are removed once a sync can read them again.",
             "rowDesc",
         )
         desc.setWordWrap(True)
@@ -966,6 +1049,7 @@ class SettingsDialog(QDialog):
     # ---- pages -------------------------------------------------------- #
 
     def page_ids(self) -> List[str]:
+        """Return the listed page ids, in order."""
         return list(self._page_rows)
 
     def _insert_page(
@@ -1073,6 +1157,7 @@ class SettingsDialog(QDialog):
             self.status.setText(f"{n} page{'s' if n != 1 else ''} · {auto}")
 
     def config(self) -> dict:
+        """Return the config as currently entered."""
         return {
             "notion_token": self.token.text().strip(),
             "notion_pages": self.page_ids(),
@@ -1082,6 +1167,7 @@ class SettingsDialog(QDialog):
         }
 
     def save(self) -> bool:
+        """Pass the config to ``on_save``; False if it isn't complete."""
         if not self._page_rows:
             self._show_error("Add at least one Notion page before saving.")
             self.page_input.setFocus()

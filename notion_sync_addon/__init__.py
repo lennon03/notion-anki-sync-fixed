@@ -31,10 +31,10 @@ try:
     from aqt.theme import theme_manager
     from aqt.utils import showWarning, tooltip
 
-    _IN_ANKI = True
-except (
-    ImportError
-):  # imported outside Anki (tests / tooling) - register nothing
+    # Anki imports add-ons once its main window exists; aqt imported by
+    # other tooling has no main window
+    _IN_ANKI = mw is not None
+except ImportError:  # imported outside Anki (tests / tooling)
     _IN_ANKI = False
 
 MENU_TITLE = "Notion Sync"
@@ -94,7 +94,8 @@ def _set_status(text: Optional[str] = None) -> None:
     label = _toolbar_label(text)
     try:
         mw.toolbar.web.eval(
-            f"(function(){{var e=document.getElementById({json.dumps(TOOLBAR_LINK_ID)});"
+            "(function(){var e=document.getElementById("
+            f"{json.dumps(TOOLBAR_LINK_ID)});"
             f"if(e)e.textContent={json.dumps(label)};}})();"
         )
     except Exception:  # toolbar not ready or replaced by another add-on
@@ -113,7 +114,7 @@ def _no_changes() -> Any:
 
 
 def _op_finished(changes: Any) -> None:
-    """What CollectionOp does after its op: refresh undo menu and screens."""
+    """Do what CollectionOp does after its op: refresh undo and screens."""
     if mw.col is None:
         return
     try:
@@ -164,7 +165,8 @@ def _hold_collection() -> None:
         return
     dialogs = _dialog_manager()
     if dialogs is None or not hasattr(dialogs, "register_dialog"):
-        return  # older/newer aqt: an op cut short by closing just fails quietly
+        # older/newer aqt: an op cut short by closing just fails quietly
+        return
     guard = _CloseGuard()
     try:
         dialogs.register_dialog(CLOSE_GUARD_NAME, _CloseGuard, guard)
@@ -218,8 +220,9 @@ def run_sync(
         if manual:
             showWarning(
                 "Notion Sync: no API token found.\n\n"
-                "Set it in Tools > Notion Sync > Settings, or use the NOTION_API_TOKEN "
-                "environment variable, or a .env file containing NOTION_API_TOKEN=... ."
+                "Set it in Tools > Notion Sync > Settings, or use the "
+                "NOTION_API_TOKEN environment variable, or a .env file "
+                "containing NOTION_API_TOKEN=... ."
             )
         return
 
@@ -250,7 +253,7 @@ def run_sync(
             tooltip(f"Notion Sync failed: {exc}", period=6000)
 
     def guarded(step: Callable[[Any], None]) -> Callable[[Any], None]:
-        """A success callback that can't leave the sync stuck as busy."""
+        """Wrap a success callback so it can't leave the sync busy."""
 
         def run(value: Any) -> None:
             try:
@@ -263,7 +266,11 @@ def run_sync(
         return run
 
     def progress(message: str) -> None:  # called on the background thread
-        mw.taskman.run_on_main(lambda: current() and _set_status(message))
+        def show() -> None:
+            if current():
+                _set_status(message)
+
+        mw.taskman.run_on_main(show)
 
     def prepare(col) -> "sync.Prepared":
         return sync.prepare_sync(col, path, full)
@@ -400,7 +407,8 @@ def _report(
 
 def _install_sync_error_probe() -> None:
     """sync_did_finish fires even when the AnkiWeb sync failed; Anki routes
-    every sync error through aqt.sync.handle_sync_error, so note it there."""
+    every sync error through aqt.sync.handle_sync_error, so note it there.
+    """
     try:
         import aqt.sync as aqt_sync
     except ImportError:
@@ -412,7 +420,8 @@ def _install_sync_error_probe() -> None:
         # for a normal sync (see _upload_to_ankiweb)
         _state["probe"] = False
         print(
-            "Notion Sync: aqt.sync.handle_sync_error not found, failed AnkiWeb "
+            "Notion Sync: aqt.sync.handle_sync_error not found, "
+            "failed AnkiWeb "
             "syncs can't be detected",
             file=sys.stderr,
         )
@@ -472,7 +481,8 @@ def _upload_to_ankiweb() -> None:
         # errors), so a failing AnkiWeb never gets a follow-up sync
         if status.required == status.FULL_SYNC:  # would ask upload/download
             tooltip(
-                "Notion Sync: AnkiWeb needs a full sync; press Sync to upload.",
+                "Notion Sync: AnkiWeb needs a full sync; "
+                "press Sync to upload.",
                 period=6000,
             )
             return
@@ -524,6 +534,7 @@ def _schedule_autosync() -> None:
 
 
 def stop_autosync() -> None:
+    """Stop the auto-sync timer."""
     timer = _state.get("timer")
     if timer is not None:
         timer.stop()

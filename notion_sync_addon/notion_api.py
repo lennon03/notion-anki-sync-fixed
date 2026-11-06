@@ -15,7 +15,7 @@ import threading
 import time
 import urllib.request
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
 API_HOST = "api.notion.com"
 BASE_URL = f"https://{API_HOST}/v1"
@@ -48,7 +48,7 @@ class NotionError(Exception):
         self.transient = transient
 
     def reason(self) -> str:
-        """A short, user-facing explanation of the failure."""
+        """Explain the failure in a few user-facing words."""
         if self.status in (401,):
             return "the token was rejected (401)"
         if self.status in (403, 404):
@@ -67,6 +67,8 @@ class NotionError(Exception):
 
 
 class NotionClient:
+    """Read-only Notion API client authenticated with ``token``."""
+
     def __init__(self, token: str):
         if not token:
             raise NotionError("No Notion API token configured")
@@ -138,7 +140,7 @@ class NotionClient:
             if status == 429 or status >= 500:
                 if attempt > MAX_RETRIES:
                     raise NotionError(
-                        f"Notion API error {status} for {path}: {payload[:300]!r}",
+                        _error_text(status, path, payload),
                         status,
                         transient=True,
                     )
@@ -148,7 +150,7 @@ class NotionClient:
                 time.sleep(min(delay, MAX_RETRY_DELAY_SECONDS))
                 continue
             raise NotionError(
-                f"Notion API error {status} for {path}: {payload[:300]!r}",
+                _error_text(status, path, payload),
                 status,
             )
 
@@ -160,6 +162,7 @@ class NotionClient:
     # ------------------------------------------------------------------ #
 
     def get_page(self, page_id: str) -> dict:
+        """GET /pages/<id>: a page, or a table row (rows are pages)."""
         return self._request("GET", f"/pages/{page_id}")
 
     def get_block_children(self, block_id: str) -> List[dict]:
@@ -173,12 +176,17 @@ class NotionClient:
                 return out
             cursor = data.get("next_cursor")
             assert isinstance(cursor, str)
-            url = f"{BASE_URL}/blocks/{block_id}/children?page_size=100&start_cursor={cursor}"
+            url = (
+                f"{BASE_URL}/blocks/{block_id}/children"
+                f"?page_size=100&start_cursor={cursor}"
+            )
 
     def get_database(self, database_id: str) -> dict:
+        """GET /databases/<id>: title and data sources of a database."""
         return self._request("GET", f"/databases/{database_id}")
 
     def get_data_source(self, data_source_id: str) -> dict:
+        """GET /data_sources/<id>."""
         return self._request("GET", f"/data_sources/{data_source_id}")
 
     def query_data_source(
@@ -212,9 +220,14 @@ class NotionClient:
             return resp.read()
 
 
+def _error_text(status: int, path: str, payload: bytes) -> str:
+    return f"Notion API error {status} for {path}: {payload[:300]!r}"
+
+
 def retry_delay(retry_after: Optional[str], default: float) -> float:
     """Seconds to wait from a Retry-After header: delta-seconds or an
-    HTTP date; anything unreadable falls back to ``default``."""
+    HTTP date; anything unreadable falls back to ``default``.
+    """
     value = (retry_after or "").strip()
     if not value:
         return default
@@ -241,6 +254,14 @@ def page_title(obj: dict) -> str:
     return ""
 
 
+class BlockSource(Protocol):
+    """Anything that lists a block's children (BlockTree, test fakes)."""
+
+    def children(self, block_id: str) -> List[dict]:
+        """Return all child blocks of ``block_id``."""
+        ...
+
+
 class BlockTree:
     """Lazy consumer of a client to resolve nested block children on demand."""
 
@@ -248,6 +269,7 @@ class BlockTree:
         self.client = client
 
     def children(self, block_id: str) -> List[dict]:
+        """Return all child blocks of ``block_id``."""
         return self.client.get_block_children(block_id)
 
 
