@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import filecmp
 import hashlib
+import html
 import json
 import os
 import re
@@ -47,7 +48,7 @@ from typing import (
     Tuple,
 )
 
-from .htmlify import MediaCollector, render_blocks
+from .htmlify import MediaCollector, render_blocks, render_lines
 from .notion_api import (
     BlockSource,
     BlockTree,
@@ -183,6 +184,9 @@ class RowCard:
     tags: List[str] = field(default_factory=list)  # Notion::... tags
     unchecked: bool = False  # sync checkbox off: no card, content not read
     columns: Optional["RowColumns"] = None  # the row's parsed properties
+    # "basic", "cloze" or "overlapping" ("" = content not read)
+    kind: str = ""
+    lines: List[str] = field(default_factory=list)  # overlapping: its lines
 
 
 @dataclass
@@ -783,7 +787,8 @@ def fingerprint(*content: str, tags: str = "") -> str:
 
 
 # role -> name used when the stored id is missing (see NOTE_TYPES_KEY)
-MODEL_NAMES = {"basic": MODEL_NAME}
+CLOZE_MODEL_NAME = "Notion Sync Cloze"
+MODEL_NAMES = {"basic": MODEL_NAME, "cloze": CLOZE_MODEL_NAME}
 
 
 def _registry(col) -> Dict[str, Any]:
@@ -1301,7 +1306,9 @@ def _fetch_table(
         fetched_at = time.time()
         recorder = _RecordingTree(tree)
         try:
-            back = render_blocks(recorder.children(row["id"]), media, recorder)
+            kind, back, lines = _render_row(
+                row["id"], front, columns.card_type, media, recorder, result
+            )
         except NotionError as e:
             # still listed in Notion: keep its note, retry next sync
             result.protected.add(row_id)
@@ -1329,9 +1336,50 @@ def _fetch_table(
                 url=row.get("url", ""),
                 tags=tags,
                 columns=columns,
+                kind=kind,
+                lines=lines,
             )
         )
     return table
+
+
+# Anki's cloze syntax: {{c1::hidden text}}
+_CLOZE = re.compile(r"\{\{c\d+::")
+
+
+def _render_row(
+    row_id: str,
+    title: str,
+    card_type: str,
+    media: MediaCollector,
+    tree: Any,
+    result: SyncResult,
+) -> Tuple[str, str, List[str]]:
+    """Download and render a row: (kind, page HTML, lines of an overlapping
+    cloze). The page is read once; the "Card type" column decides the kind,
+    otherwise a cloze marker in the title or page makes it a cloze.
+    """
+    blocks = tree.children(row_id)
+    if card_type == "overlapping":
+        lines = render_lines(blocks, media, tree)
+        if lines:
+            return "overlapping", "\n".join(lines), lines
+        result.warnings.append(
+            f"Row '{title}': Card type is Overlapping but the page has no "
+            "line; made a basic card"
+        )
+        return "basic", "", []
+    back = render_blocks(blocks, media, tree)
+    if card_type == "basic":
+        return "basic", back, []
+    if _CLOZE.search(title) or _CLOZE.search(back):
+        return "cloze", back, []
+    if card_type == "cloze":
+        result.warnings.append(
+            f"Row '{title}': Card type is Cloze but no {{{{c1::...}}}} "
+            "was found; made a basic card"
+        )
+    return "basic", back, []
 
 
 def _bare(notion_id: str) -> str:
@@ -1569,6 +1617,83 @@ def _get_or_create_model(
     return refreshed if refreshed is not None else model
 
 
+CLOZE_FRONT_STYLE = (
+    "<style>"
+    ".ns-q .ns-overlap .ns-line:has(.cloze) ~ .ns-line "
+    "{ display: none; }"
+    "</style>"
+)
+
+
+def _get_or_create_cloze_model(
+    col,
+    before_change: Callable[[], None] = _no_change,
+    css: str = MODEL_CSS,
+) -> dict:
+    """Find or build the 'Notion Sync Cloze' note type (Text, Back Extra,
+    Source). Like the basic type, an existing one is left as it is.
+    """
+    model = find_model(col, "cloze")
+    if model is not None:
+        return model
+
+    before_change()
+    model = col.models.new(CLOZE_MODEL_NAME)
+    model["type"] = 1  # anki.models.MODEL_CLOZE
+    existing = {f["name"] for f in model["flds"]}
+    for fname in ("Text", "Back Extra", "Source"):
+        if fname not in existing:
+            col.models.add_field(model, col.models.new_field(fname))
+    col.models.add_template(
+        model,
+        {
+            "name": "Cloze",
+            "ord": 0,
+            "qfmt": '<div class="ns-q">{{cloze:Text}}</div>'
+            + CLOZE_FRONT_STYLE,
+            "afmt": '<div class="ns-a">{{cloze:Text}}</div>'
+            "{{#Back Extra}}<hr id=answer>{{Back Extra}}{{/Back Extra}}",
+        },
+    )
+    model["css"] = css
+    col.models.add_dict(model)
+    refreshed = col.models.by_name(CLOZE_MODEL_NAME)
+    return refreshed if refreshed is not None else model
+
+
+def _guard_cloze(line: str) -> str:
+    """Keep ``}}`` and ``::`` of a line from ending or splitting its cloze.
+
+    A line holding a cloze marker of its own is left as written: its
+    markers are meant (nested clozes), so the line is wrapped as it is.
+    """
+    if _CLOZE.search(line):
+        return line
+    line = line.replace("}}", "}&#125;").replace("::", ":&#58;")
+    return line[:-1] + "&#125;" if line.endswith("}") else line
+
+
+def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
+    """Return a row's [Front/Text, Back/Back Extra], by its kind."""
+    title = row.front
+    back = MediaCollector.resolve(row.back_html, imported_names)
+    shown = f'<div class="ns-title">{html.escape(title, quote=False)}</div>'
+    if row.kind == "overlapping":
+        lines = [
+            '<div class="ns-line">{{c%d::%s}}</div>'
+            % (i, _guard_cloze(MediaCollector.resolve(line, imported_names)))
+            for i, line in enumerate(row.lines, 1)
+        ]
+        fields = [f'{shown}<div class="ns-overlap">{"".join(lines)}</div>', ""]
+    elif row.kind == "cloze" and _CLOZE.search(title):
+        fields = [title, back]
+    elif row.kind == "cloze":
+        fields = [shown + back, ""]
+    else:
+        fields = [title, back]
+    return [unicodedata.normalize("NFC", f) for f in fields]
+
+
 class _UndoStep:
     """One "Notion Sync" undo entry, created only once something changes.
 
@@ -1754,6 +1879,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     _drop_legacy_state(col, undo.begin)
     model = _get_or_create_model(col, undo.begin, card_css(result.config))
     _remember_model(col, "basic", model, undo.begin)
+    own: Dict[str, dict] = {}  # the cloze type, once a cloze row needs it
     imported_names = _import_media(col, result)
 
     notes = synced_notes(col)
@@ -1813,34 +1939,71 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     else:
                         _forget(result, row.source_id)
                     continue
-                front = unicodedata.normalize("NFC", row.front)
-                back = unicodedata.normalize(
-                    "NFC",
-                    MediaCollector.resolve(row.back_html, imported_names),
-                )
+                front, back = _row_fields(row, imported_names)
                 written = fingerprint(front, back, tags=owned_key(row.tags))
-                if nid is None:
+                is_cloze = row.kind in ("cloze", "overlapping")
+                target = model
+                if is_cloze:
+                    target = _cloze_model(col, own, undo, result)
+                replacing = entry is not None and entry.mid != target["id"]
+                if nid is None or replacing:
                     undo.begin()
-                    if deck_id is None:
+                    home = (
+                        _deck_of(col, entry.nid, None)
+                        if entry is not None
+                        else None
+                    )
+                    if home is None and deck_id is None:
                         deck_id = get_or_create_deck(
                             col, f"{page.deck_name}::{table.title}"
                         )
-                    note = Note(col, model)
+                    note = Note(col, target)
                     note.fields[FRONT] = front
                     note.fields[BACK] = back
                     note.fields[SOURCE] = row.source_id
                     note.tags = list(row.tags)
-                    col.add_note(note, deck_id)
+                    if replacing:
+                        assert entry is not None
+                        old = col.get_note(entry.nid)
+                        note.tags = _with_tags(old.tags, row.tags)
+                    try:
+                        col.add_note(note, home or deck_id)
+                    except Exception as e:  # noqa: BLE001 - e.g. no cloze
+                        if not is_cloze:
+                            raise
+                        result.warnings.append(
+                            f"Row '{row.front}': Anki refused the cloze "
+                            f"note ({e}); the row is tried again next sync"
+                        )
+                        continue
+                    if replacing:
+                        assert entry is not None
+                        undo.begin()
+                        col.remove_notes([entry.nid])
+                        notes[row.source_id] = [
+                            SyncedNote(note.id, written, target["id"], "")
+                        ] + (entries or [])[1:]
+                        stats["updated"] += bump
+                    else:
+                        added.add(row.source_id)
+                        stats["added"] += 1
                     nid = note.id
-                    added.add(row.source_id)
-                    stats["added"] += 1
                 elif current != written:
                     undo.begin()
                     note = col.get_note(nid)
                     note.fields[FRONT] = front
                     note.fields[BACK] = back
                     note.tags = _with_tags(note.tags, row.tags)
-                    col.update_note(note)
+                    try:
+                        col.update_note(note)
+                    except Exception as e:  # noqa: BLE001 - e.g. no cloze
+                        if not is_cloze:
+                            raise
+                        result.warnings.append(
+                            f"Row '{row.front}': Anki refused the cloze "
+                            f"note ({e}); the row is tried again next sync"
+                        )
+                        continue
                     stats["updated"] += bump
                 else:
                     if state is not None:
@@ -1854,6 +2017,29 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
     return stats
+
+
+def _cloze_model(
+    col, own: Dict[str, dict], undo: _UndoStep, result: SyncResult
+) -> dict:
+    """Return the cloze note type, created (and remembered) on first use."""
+    if "cloze" not in own:
+        model = _get_or_create_cloze_model(
+            col, undo.begin, card_css(result.config)
+        )
+        _remember_model(col, "cloze", model, undo.begin)
+        own["cloze"] = model
+    return own["cloze"]
+
+
+def _deck_of(col, nid: int, fallback: Optional[int]) -> Optional[int]:
+    """Return the deck of a note's first card (home deck if filtered)."""
+    did = col.db.scalar(
+        "select case when odid then odid else did end from cards "
+        "where nid=? order by ord limit 1",
+        nid,
+    )
+    return int(did) if did else fallback
 
 
 def _stored_fingerprint(note) -> str:
