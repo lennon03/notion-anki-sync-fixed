@@ -241,6 +241,54 @@ def render_blocks(blocks: List[dict], media: MediaCollector, tree: Any) -> str:
     return "\n".join(x for x in out if x)
 
 
+_LIST_TYPES = ("bulleted_list_item", "numbered_list_item", "to_do")
+
+
+def _split_rich_lines(rts: Optional[List[dict]]) -> List[List[dict]]:
+    """Cut rich text at its line breaks (formatting stays balanced)."""
+    lines: List[List[dict]] = [[]]
+    for rt in rts or []:
+        if rt.get("type", "text") != "text":
+            lines[-1].append(rt)
+            continue
+        text = rt.get("text") or {}
+        for index, piece in enumerate(
+            str(text.get("content", "")).split("\n")
+        ):
+            if index:
+                lines.append([])
+            if piece:
+                lines[-1].append({**rt, "text": {**text, "content": piece}})
+    return lines
+
+
+def render_lines(
+    blocks: List[dict], media: MediaCollector, tree: Any
+) -> List[str]:
+    """Render top-level blocks as separate lines of HTML.
+
+    Every block is a line, every list item too (as its inner HTML) and a
+    paragraph is cut at its line breaks. Empty lines and dividers are
+    dropped.
+    """
+    out: List[str] = []
+    for block in blocks:
+        btype = block.get("type")
+        if btype not in _BLOCK_BODY_TYPES or btype == "divider":
+            continue
+        if btype in _LIST_TYPES:
+            item = _render_list_items([block], btype, media, tree)
+            out.append(re.sub(r"(?s)^<li>(.*)</li>$", r"\1", item))
+        elif btype == "paragraph" and not block.get("has_children"):
+            rich = (block.get("paragraph") or {}).get("rich_text")
+            out += [
+                rich_text_to_html(line) for line in _split_rich_lines(rich)
+            ]
+        else:
+            out.append(_render_block(block, media, tree))
+    return [line for line in out if line.strip()]
+
+
 def _render_list_items(
     items: List[dict], btype: str, media: MediaCollector, tree: Any
 ) -> str:
