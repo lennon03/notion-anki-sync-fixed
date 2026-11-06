@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import re
 from types import SimpleNamespace
 from typing import Any, Dict, List, cast
 
@@ -116,7 +117,14 @@ def test_code_block_and_math_block():
     )
     assert '<pre class="ns-code" style="' in out
     assert "background:#f6f7f8" in out
-    assert "<code>def f():\n  return &lt;tag&gt;</code></pre>" in out
+    code = re.search(
+        r'<code class="language-python">(.*?)</code></pre>', out, re.S
+    )
+    assert code is not None
+    # highlighted, and nothing lost: without the token spans it is the code
+    assert "<span" in code.group(1)
+    plain = re.sub(r"<[^>]+>", "", code.group(1))
+    assert plain == "def f():\n  return &lt;tag&gt;"
     assert "\\[e^{i\\pi}+1=0\\]" in out
 
 

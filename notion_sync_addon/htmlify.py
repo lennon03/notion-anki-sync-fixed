@@ -19,6 +19,8 @@ import html
 import re
 from typing import Any, Dict, List, Optional
 
+from .highlight import highlight, language_slug
+
 
 class MediaCollector:
     """Collects downloadable file URLs found while rendering blocks."""
@@ -187,6 +189,15 @@ _BLOCK_BODY_TYPES = (
     "embed",
     "link_preview",
     "divider",
+    "synced_block",
+    "column_list",
+    "column",
+    "link_to_page",
+    "child_page",
+)
+
+_NOT_SHARED_NOTE = (
+    '<p class="ns-note">[synced block not shared with the integration]</p>'
 )
 
 _CODE_BLOCK_STYLE = (
@@ -258,7 +269,11 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
     body = block.get(btype, {})
     text = rich_text_to_html(body.get("rich_text"))
     children_html = ""
-    if block.get("has_children") and btype != "table":
+    if btype == "synced_block":
+        return _render_synced(block, media, tree)
+    if btype in ("child_page", "link_to_page"):
+        pass  # never inline another page's content
+    elif block.get("has_children") and btype != "table":
         kids = tree.children(block.get("id"))
         if kids:
             children_html = render_blocks(kids, media, tree)
@@ -282,9 +297,11 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
         return f"<details><summary>{text}</summary>{children_html}</details>"
     if btype == "code":
         content = _plain(body.get("rich_text") or [])
+        lang = body.get("language") or ""
         return (
             f'<pre class="ns-code" style="{_CODE_BLOCK_STYLE}">'
-            f'<code>{html.escape(content)}</code></pre>'
+            f'<code class="language-{language_slug(lang)}">'
+            f"{highlight(content, lang)}</code></pre>"
         )
     if btype == "equation":
         return (
@@ -298,13 +315,23 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
         url = body.get("url", "")
         caption = rich_text_to_html(body.get("caption"))
         return f'<p><a href="{_attr(url)}">{_esc(url)}</a>{caption}</p>'
+    if btype == "column_list":
+        return (
+            '<div class="ns-columns" '
+            'style="display:flex;flex-wrap:wrap;gap:12px">'
+            f"{children_html}</div>"
+        )
+    if btype == "column":
+        return (
+            '<div class="ns-column" style="flex:1 1 200px;min-width:0">'
+            f"{children_html}</div>"
+        )
     if btype == "link_to_page":
-        lr = body.get("link_to_page", {})
-        href = _attr(lr.get("page_url", "") or lr.get("url", ""))
-        return f'<p><a href="{href}">→ page</a></p>'
+        target = body.get("page_id") or body.get("database_id") or ""
+        return f'<p><a href="{_notion_url(target)}">→ linked page</a></p>'
     if btype == "child_page":
         return (
-            f'<p><a href="{_attr(body.get("url", ""))}">'
+            f'<p><a href="{_notion_url(block.get("id", ""))}">'
             f'{_esc(body.get("title") or "child page")}</a></p>'
         )
     if btype == "child_database":
@@ -313,9 +340,30 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
         return f'<p><a href="{href}">→ {name}</a></p>'
     if btype == "table":
         return _render_table(block, media, tree)
-    if btype == "synced_block":
-        return children_html
     return children_html
+
+
+def _notion_url(block_id: str) -> str:
+    return _attr("https://www.notion.so/" + str(block_id).replace("-", ""))
+
+
+def _render_synced(block: dict, media: MediaCollector, tree: Any) -> str:
+    """Render a synced block; copies show the original's children."""
+    body = block.get("synced_block") or {}
+    source = (body.get("synced_from") or {}).get("block_id")
+    if not source:
+        if not block.get("has_children"):
+            return ""
+        return render_blocks(tree.children(block.get("id")), media, tree)
+    try:
+        kids = tree.children(source)
+    except Exception as e:
+        # 403/404: the original isn't shared. Transient errors propagate so
+        # the row is retried instead of caching a wrong render.
+        if getattr(e, "transient", False) or not getattr(e, "status", 0):
+            raise
+        return _NOT_SHARED_NOTE
+    return render_blocks(kids, media, tree) if kids else ""
 
 
 def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
