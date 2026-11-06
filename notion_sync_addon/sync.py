@@ -82,7 +82,7 @@ UNCHECKED_TAG = "notion-sync::unchecked"
 #   problems: what the last sync could not read, shown in the settings dialog
 # Bump RENDER_VERSION whenever the HTML produced for a row changes so every
 # row is re-rendered once (row origins and the page structure are kept).
-RENDER_VERSION = 3
+RENDER_VERSION = 4
 # Older versions kept the cache in the collection config under this key.
 LEGACY_STATE_KEY = "notionSync.rowState"
 # Notion's last_edited_time has minute precision; a row only counts as
