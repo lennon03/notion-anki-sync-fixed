@@ -12,7 +12,7 @@
 
 ## Card types
 
-- [ ] **Support cloze cards.** Today every row becomes a basic Front/Back
+- [x] **Support cloze cards.** Today every row becomes a basic Front/Back
   card. Decide how a cloze is marked in Notion: typed `{{c1::...}}` syntax,
   or formatting such as highlighted, underlined or inline-code text turned into
   clozes. Also decide whether that is set per table or per row. Cloze rows need
@@ -32,7 +32,7 @@
     and the card's shape changes anyway. The row exists, so this is a
     replacement, never a loss of the row's card. A "Cloze" row with no
     cloze in it stays basic, with a warning.
-- [ ] **Overlapping cloze: hides one line at a time.** For quotes and other
+- [x] **Overlapping cloze: hides one line at a time.** For quotes and other
   text to learn by heart: each card hides one line and shows the lines around
   it as cues, so you recite the text line by line. Decide how a row opts in
   (per table setting or a marker in Notion) and how lines are split (Notion
@@ -69,7 +69,7 @@
     used types keeps them synced. Cloze rows always use "Notion Sync
     Cloze".
 
-- [ ] **Custom styling presets.** Let the user pick a card style in settings
+- [x] **Custom styling presets.** Let the user pick a card style in settings
   (e.g. a T3 Ocean light/dark look matching the settings dialog, a minimal
   one, Anki's default) and preview it before applying. Note: today
   `_get_or_create_model` resets the note type's CSS to the built-in style on
@@ -86,7 +86,7 @@
 
 ## Content
 
-- [ ] **Syntax highlighting for code blocks.** Today a Notion code block becomes
+- [x] **Syntax highlighting for code blocks.** Today a Notion code block becomes
   plain monospace text: htmlify drops the block's `language`. Keep the language
   (e.g. `class="language-python"`) and highlight it. Options: highlight at sync
   time in Python (static HTML with inline colors, works offline and on every
@@ -102,7 +102,7 @@
     Output is static HTML that works offline on every Anki client; colors
     are inline `var(--ns-code-*, fallback)` so presets can retune them for
     dark mode. The language is kept as `class="language-xxx"`.
-- [ ] **Tags.** Turn Notion data into Anki tags, two possible sources:
+- [x] **Tags.** Turn Notion data into Anki tags, two possible sources:
   - a dedicated column (multi-select or text) whose values become tags;
   - strikethrough text inside the card's page: struck-through words become
     tags and are removed from the card content.
@@ -116,7 +116,7 @@
     `Notion::`; the add-on owns exactly the tags under `Notion::`, so tags
     added by hand elsewhere are never touched, without any per-device
     bookkeeping. The column name is configurable (`tags_column`).
-- [ ] **Adjacent note: a "Context" column linking to another page.** A third
+- [x] **Adjacent note: a "Context" column linking to another page.** A third
   column (a relation or URL property) points to a Notion page with background
   context for the row: an adjacent note shown with the card. Decide how it
   appears on the card: the linked page's content rendered in a collapsible
@@ -134,7 +134,7 @@
 
 ## Choosing what syncs
 
-- [ ] **Checkbox column to choose which rows sync.** A checkbox property
+- [x] **Checkbox column to choose which rows sync.** A checkbox property
   (e.g. "Anki") in a Notion table decides which rows become cards. Unchecked
   rows are skipped. Decide whether unchecking a row that is already synced
   deletes, suspends or keeps its card, and what happens in tables that don't
@@ -179,7 +179,7 @@ overwrites synced cards with what Notion says.
 
 Notion should always win. Known gaps, deferred from the review of PR #1:
 
-- [ ] **Renamed Notion page or table doesn't move existing cards.** Deck
+- [x] **Renamed Notion page or table doesn't move existing cards.** Deck
   names come from the page and table titles, but existing notes keep their
   cards in the old deck; only new rows land in the renamed deck. Decide
   whether a rename should move the cards (only those still in the old
@@ -189,7 +189,7 @@ Notion should always win. Known gaps, deferred from the review of PR #1:
     in. After a rename, synced cards still in that old deck move to the new
     one; cards the user moved elsewhere stay. The old deck is never deleted
     (the add-on never deletes decks); it is left for the user to remove.
-- [ ] **Renaming the note type or its Source field in Anki makes duplicates.**
+- [x] **Renaming the note type or its Source field in Anki makes duplicates.**
   The add-on finds its notes by the "Notion Sync Card" note type and its
   "Source" field. If either is renamed, no synced note is found, every row is
   added again and the old notes are never removed. Remember the note type id
@@ -200,7 +200,7 @@ Notion should always win. Known gaps, deferred from the review of PR #1:
     config (synced via AnkiWeb) and looked up by id first, name second.
     Its own types use fixed field positions (Front/Text, Back/Back Extra,
     Source), so renaming a field changes nothing.
-- [ ] **Synced blocks and columns inside a row aren't rendered.** htmlify
+- [x] **Synced blocks and columns inside a row aren't rendered.** htmlify
   skips `synced_block`, `column_list`/`column`, `link_to_page` and
   `child_page` blocks, so that content never reaches the card. Rendering
   synced block copies needs their original's children; rows with copies are
