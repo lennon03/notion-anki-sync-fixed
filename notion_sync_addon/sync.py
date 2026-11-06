@@ -168,6 +168,8 @@ class Cache:
     problems: List[str] = field(default_factory=list)
     # unlisted row id -> when _check_unlisted last asked Notion about it
     checked: Dict[str, float] = field(default_factory=dict)
+    # database id -> full name of the deck its cards were put in
+    decks: Dict[str, str] = field(default_factory=dict)
     raw: str = ""  # file content as loaded: an identical cache isn't rewritten
 
 
@@ -236,6 +238,8 @@ class SyncResult:
         self.db_cache: Dict[str, str] = {}
         self.pages_out: Dict[str, list] = {}
         self.dbs_out: Dict[str, str] = {}
+        # table -> deck name, for the tables read cleanly (see _move_renamed)
+        self.decks_out: Dict[str, str] = {}
         self.page_ids: List[str] = []  # configured pages, canonical ids
         # set when part of Notion could not be read. Notes are then only
         # removed if the page and table they last came from were read fine,
@@ -691,12 +695,18 @@ def load_cache(path: str) -> Cache:
         for k, v in _dict(state.get("checked")).items()
         if isinstance(v, (int, float)) and not isinstance(v, bool)
     }
+    decks = {
+        str(k): v
+        for k, v in _dict(state.get("decks")).items()
+        if isinstance(v, str) and v
+    }
     return Cache(
         rows=rows,
         pages=pages,
         dbs=dbs,
         problems=[str(p) for p in problems],
         checked=checked,
+        decks=decks,
         raw=raw if current else "",
     )
 
@@ -726,6 +736,8 @@ def _cache_text(cache: Cache) -> str:
     }
     if cache.checked:  # absent when empty: older caches stay identical
         state["checked"] = dict(sorted(cache.checked.items()))
+    if cache.decks:
+        state["decks"] = dict(sorted(cache.decks.items()))
     return json.dumps(
         state,
         separators=(",", ":"),
@@ -1850,6 +1862,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     # fingerprint of what Anki actually stored (normally
                     # what was written; read back in case it differs)
                     state.fingerprint = _stored_fingerprint(col.get_note(nid))
+    stats["updated"] += _move_renamed(col, result, notes, undo)
     removed, gone = _remove_obsolete(col, notes, seen, result, undo.begin)
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
@@ -1903,6 +1916,67 @@ def _release(col, nid: int, undo: _UndoStep) -> None:
 def get_or_create_deck(col, name: str) -> int:
     """Return the id of deck ``name``, creating it if needed."""
     return col.decks.id(name, create=True)
+
+
+def _move_renamed(
+    col,
+    result: SyncResult,
+    notes: Dict[str, List[SyncedNote]],
+    undo: _UndoStep,
+) -> int:
+    """Move the cards of a renamed (or moved) table to its new deck.
+
+    The cache remembers the deck each table's cards were put in. For a
+    table read cleanly whose deck name changed, the cards of its synced
+    notes that still sit in the old deck follow; cards the user moved
+    elsewhere, notes made by hand and the old deck itself stay as they are.
+    Records the deck names in ``result.decks_out``; returns the number of
+    notes moved.
+    """
+    old_names = result.previous.decks
+    moved = 0
+    for page in result.pages:
+        for table in page.tables:
+            db_id = table.db_id
+            page_id = result.db_pages.get(db_id, "")
+            if (
+                not db_id
+                or db_id in result.failed_dbs
+                or (page_id and page_id in result.failed_pages)
+            ):
+                continue
+            name = f"{page.deck_name}::{table.title}"
+            result.decks_out[db_id] = name
+            old = old_names.get(db_id)
+            if not old or old == name:
+                continue
+            old_id = col.decks.id_for_name(old)
+            if old_id is None:
+                continue
+            nids = sorted(
+                {
+                    entries[0].nid
+                    for row in table.rows
+                    for entries in [notes.get(row.source_id)]
+                    if entries
+                }
+            )
+            by_note: List[List[int]] = []
+            for nid in nids:
+                cids = col.db.list(
+                    "select id from cards where nid = ? and did = ?",
+                    nid,
+                    old_id,
+                )
+                if cids:
+                    by_note.append(cids)
+            if not by_note:
+                continue
+            undo.begin()
+            new_id = get_or_create_deck(col, name)
+            col.set_deck([c for cids in by_note for c in cids], new_id)
+            moved += len(by_note)
+    return moved
 
 
 def _removal_blocked(source_id: str, result: SyncResult) -> bool:
@@ -1984,11 +2058,19 @@ def _next_cache(result: SyncResult) -> Cache:
     dbs.update(result.dbs_out)
     checked = dict(result.previous.checked)
     checked.update(result.checked)
+    # remembered decks of tables not read now stay while their page does
+    listed = {db for entry in pages.values() for db, _title in entry[2]}
+    listed |= {
+        db for db, pid in result.db_pages.items() if pid in result.page_ids
+    }
+    decks = {k: v for k, v in result.previous.decks.items() if k in listed}
+    decks.update(result.decks_out)
     return Cache(
         rows=rows,
         pages=pages,
         dbs=dbs,
         problems=list(result.problems),
         checked={k: t for k, t in checked.items() if k in remaining},
+        decks=decks,
         raw=result.previous.raw,
     )
