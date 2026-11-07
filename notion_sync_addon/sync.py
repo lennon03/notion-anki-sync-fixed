@@ -205,6 +205,7 @@ class RowCard:
     # "basic", "cloze" or "overlapping" ("" = content not read)
     kind: str = ""
     lines: List[str] = field(default_factory=list)  # overlapping: its lines
+    overlap: Optional["OverlapSpec"] = None  # overlapping: Card type options
 
 
 @dataclass
@@ -1484,7 +1485,7 @@ def _fetch_table(
         fetched_at = time.time()
         recorder = _RecordingTree(tree)
         try:
-            kind, back, lines = _render_row(
+            kind, back, lines, overlap = _render_row(
                 row["id"], front, columns.card_type, media, recorder, result
             )
             context = _render_context(
@@ -1520,6 +1521,7 @@ def _fetch_table(
                 columns=columns,
                 kind=kind,
                 lines=lines,
+                overlap=overlap,
             )
         )
     return table
@@ -1614,6 +1616,54 @@ def _render_context(
 _CLOZE = re.compile(r"\{\{c\d+::")
 
 
+@dataclass(frozen=True)
+class OverlapSpec:
+    """Options of an ``Overlapping`` Card type, e.g. ``Overlapping 2/1 x2``.
+
+    ``before``/``after`` are how many previous/following clozes are shown as
+    cues (``before`` None = every previous one, none after: the plain
+    behaviour); ``group`` is how many lines make one cloze.
+    """
+
+    before: Optional[int] = None
+    after: int = 0
+    group: int = 1
+
+    @property
+    def window(self) -> bool:
+        return self.before is not None
+
+
+OVERLAP_MAX = 9  # largest before/after count
+OVERLAP_MAX_GROUP = 20  # largest lines per cloze
+OVERLAP_SYNTAX = (
+    "Overlapping, Overlapping 2/1, Overlapping x2 or Overlapping 2/1 x2"
+)
+_OVERLAP_SPEC = re.compile(
+    r"overlapping(?:\s+(\d+)\s*/\s*(\d+))?(?:\s+x\s*(\d+))?"
+)
+
+
+def parse_overlap(card_type: str) -> Optional[OverlapSpec]:
+    """Parse a lowercased Card type that starts with ``overlapping``.
+
+    ``overlapping``: the plain spec. ``overlapping B/A``: B previous and A
+    following clozes shown. ``xN`` (after B/A or alone): N lines per cloze.
+    None if the options are invalid or out of range.
+    """
+    m = _OVERLAP_SPEC.fullmatch(card_type.strip())
+    if m is None:
+        return None
+    before = int(m.group(1)) if m.group(1) is not None else None
+    after = int(m.group(2)) if m.group(2) is not None else 0
+    group = int(m.group(3)) if m.group(3) is not None else 1
+    if (before or 0) > OVERLAP_MAX or after > OVERLAP_MAX:
+        return None
+    if not 1 <= group <= OVERLAP_MAX_GROUP:
+        return None
+    return OverlapSpec(before, after, group)
+
+
 def _render_row(
     row_id: str,
     title: str,
@@ -1621,32 +1671,41 @@ def _render_row(
     media: MediaCollector,
     tree: Any,
     result: SyncResult,
-) -> Tuple[str, str, List[str]]:
+) -> Tuple[str, str, List[str], Optional[OverlapSpec]]:
     """Download and render a row: (kind, page HTML, lines of an overlapping
-    cloze). The page is read once; the "Card type" column decides the kind,
-    otherwise a cloze marker in the title or page makes it a cloze.
+    cloze, its options). The page is read once; the "Card type" column
+    decides the kind, otherwise a cloze marker in the title or page makes it
+    a cloze.
     """
     blocks = tree.children(row_id)
-    if card_type == "overlapping":
+    if card_type.split(None, 1)[:1] == ["overlapping"]:
+        spec = parse_overlap(card_type)
+        if spec is None:
+            result.warnings.append(
+                f"Row '{title}': Card type '{card_type}' is not understood "
+                f"(use {OVERLAP_SYNTAX}); used plain Overlapping"
+            )
+            spec = OverlapSpec()
         lines = render_lines(blocks, media, tree)
         if lines:
-            return "overlapping", "\n".join(lines), lines
+            options = None if spec == OverlapSpec() else spec
+            return "overlapping", "\n".join(lines), lines, options
         result.warnings.append(
             f"Row '{title}': Card type is Overlapping but the page has no "
             "line; made a basic card"
         )
-        return "basic", "", []
+        return "basic", "", [], None
     back = render_blocks(blocks, media, tree)
     if card_type == "basic":
-        return "basic", back, []
+        return "basic", back, [], None
     if _CLOZE.search(title) or _CLOZE.search(back):
-        return "cloze", back, []
+        return "cloze", back, [], None
     if card_type == "cloze":
         result.warnings.append(
             f"Row '{title}': Card type is Cloze but no {{{{c1::...}}}} "
             "was found; made a basic card"
         )
-    return "basic", back, []
+    return "basic", back, [], None
 
 
 def _bare(notion_id: str) -> str:
@@ -1945,18 +2004,50 @@ def _guard_cloze(line: str) -> str:
     return line[:-1] + "&#125;" if line.endswith("}") else line
 
 
+def _window_style(spec: OverlapSpec) -> str:
+    """The question-side CSS of a windowed overlapping cloze: every line is
+    hidden except the asked one, ``before`` previous and ``after`` following
+    ones. It lives in the note's own field because an existing note type
+    keeps its old template.
+    """
+    base = ".ns-q .ns-window .ns-line"
+    active = base + ":has(.cloze)"
+    show = " { display: block; }"
+    rules = [base + " { display: none; }", active + show]
+    for d in range(1, (spec.before or 0) + 1):
+        between = " + .ns-line" * (d - 1)
+        rules.append(f"{base}:has(+ .ns-line{between}:has(.cloze)){show}")
+    for d in range(1, spec.after + 1):
+        rules.append(f"{active}{' + .ns-line' * d}{show}")
+    return "<style>" + "".join(rules) + "</style>"
+
+
 def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
     """Return a row's [Front/Text, Back/Back Extra], by its kind."""
     title = row.front
     back = MediaCollector.resolve(row.back_html, imported_names)
     shown = f'<div class="ns-title">{html.escape(title, quote=False)}</div>'
     if row.kind == "overlapping":
-        lines = [
-            '<div class="ns-line">{{c%d::%s}}</div>'
-            % (i, _guard_cloze(MediaCollector.resolve(line, imported_names)))
-            for i, line in enumerate(row.lines, 1)
+        spec = row.overlap or OverlapSpec()
+        guarded = [
+            _guard_cloze(MediaCollector.resolve(line, imported_names))
+            for line in row.lines
         ]
-        fields = [f'{shown}<div class="ns-overlap">{"".join(lines)}</div>', ""]
+        size = spec.group
+        groups = [
+            "<br>".join(guarded[i : i + size])
+            for i in range(0, len(guarded), size)
+        ]
+        lines = [
+            '<div class="ns-line">{{c%d::%s}}</div>' % (i, group)
+            for i, group in enumerate(groups, 1)
+        ]
+        wrap = "ns-window" if spec.window else "ns-overlap"
+        style = _window_style(spec) if spec.window else ""
+        fields = [
+            f'{style}{shown}<div class="{wrap}">{"".join(lines)}</div>',
+            "",
+        ]
     elif row.kind == "cloze" and _CLOZE.search(title):
         fields = [title, back]
     elif row.kind == "cloze":

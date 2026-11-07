@@ -46,7 +46,8 @@
     `<div class="ns-line">`, and a `<style>` in the front template hides
     the lines after the asked one (`:has()`), so the front shows the
     previous lines as cues and the back shows the whole text. No extra note
-    type, so no field-count limit.- [ ] **Cloze Overlapper-style options for overlapping cloze.** The current
+    type, so no field-count limit.
+- [x] **Cloze Overlapper-style options for overlapping cloze.** The current
   `Overlapping` card type always shows every previous line and hides the rest,
   and relies on CSS `:has()` to hide later lines (unverified on phones). Bring
   it closer to the Cloze Overlapper add-on: (a) how many previous lines and
@@ -56,6 +57,24 @@
   multi-id clozes (`{{c1,2::...}}`) can express the same hiding, so it also
   works in AnkiDroid and AnkiMobile. Same note type, existing rows must not
   change unless their Card type changes.
+  - *Decision:* options go after the word in the "Card type" column:
+    `Overlapping 2/1` shows 2 previous and 1 following group as cues (each
+    0 to 9, everything else hidden), `x2` makes 2 lines one cloze (`x1` to
+    `x20`, lines joined with `<br>`), and both combine as
+    `Overlapping 2/1 x2`. Plain `Overlapping` is byte-identical to before,
+    so `RENDER_VERSION` is not bumped. A spec the add-on can't parse warns
+    and the row is made as plain `Overlapping`. A windowed row gets its own
+    `<style>` (scoped to the question side, class `ns-window`) in the Text
+    field, not in the note type's template: existing note types keep their
+    old template, so a template change would not reach them. `:has()` is
+    kept: multi-id clozes were tried against a real collection and don't
+    express the same thing. `{{c1,2::line}}` can only turn a line into
+    `[...]` on the card; it can't remove it, so the lines outside the window
+    stay as a stack of `[...]` that can't be told from the asked line (all
+    are `span.cloze`), the back highlights all of them, and Anki puts the
+    hidden text in a `data-cloze` attribute. Plain `Overlapping` would also
+    change for existing rows. Tests render every card of a real collection;
+    the CSS itself is not run in a browser by the tests.
 
 - [x] **Export to a chosen note type.** Let the user pick which Anki note type
   (and so which card design) a table's rows use, instead of always using

@@ -35,7 +35,7 @@
   <tr><th>Column</th><th>Type</th><th>What it does</th></tr>
   <tr><td><code>Anki</code></td><td>Checkbox</td><td>Unticked rows don't get a card.</td></tr>
   <tr><td><code>Tags</code></td><td>Multi-select, select, or text</td><td>Values become Anki tags.</td></tr>
-  <tr><td><code>Card type</code></td><td>Select or text</td><td><code>Cloze</code>, <code>Overlapping</code> or <code>Basic</code>.</td></tr>
+  <tr><td><code>Card type</code></td><td>Select or text</td><td><code>Cloze</code>, <code>Overlapping</code> (with options, see below) or <code>Basic</code>.</td></tr>
   <tr><td><code>Context</code></td><td>Relation, URL or text</td><td>Links a Notion page shown on the back.</td></tr>
 </table>
 <p>A table without a column simply behaves as before. Nothing is required.</p>
@@ -51,7 +51,15 @@
 
 <h2>Overlapping cloze</h2>
 <p>For text you recite line by line (quotes, poems). Set <code>Card type</code> to <code>Overlapping</code>. Each top-level block of the page (each list item too) is a line. Each card hides one line and shows the previous lines as cues. The back shows the full text.</p>
-<div class="note warn">The hiding of later lines uses the CSS <code>:has()</code> rule. Test it on your phone; on an old AnkiDroid or WebView without <code>:has()</code>, later lines would be visible.</div>
+<p>Options go after the word in the same column:</p>
+<ul>
+  <li><code>Overlapping</code>: all previous lines are shown, later lines are hidden.</li>
+  <li><code>Overlapping 2/1</code>: show 2 previous lines and 1 following line as cues; every other line is hidden. Each number is 0 to 9.</li>
+  <li><code>Overlapping x2</code>: 2 lines make one cloze (one card per 2 lines). Up to <code>x20</code>.</li>
+  <li><code>Overlapping 2/1 x2</code>: both. The numbers then count groups, not lines.</li>
+</ul>
+<p>An option the add-on does not understand (for example <code>Overlapping 2</code>) gives a warning and the row is made as plain <code>Overlapping</code>. Changing the option in Notion updates the card.</p>
+<div class="note warn">The hiding of lines uses the CSS <code>:has()</code> rule. Test it on your phone; on an old AnkiDroid or WebView without <code>:has()</code>, hidden lines would be visible. Anki's multi-id clozes (<code>{{c1,2::...}}</code>) were tried instead, but they only turn a line into <code>[...]</code>, they cannot remove it, so the CSS stays.</div>
 
 <h2>Tags</h2>
 <p>Fill the <code>Tags</code> column. Spaces become underscores, quotes are dropped, and <code>::</code> makes a hierarchy. Every tag is put under <code>Notion::</code>, so <code>physics</code> becomes <code>Notion::physics</code>.</p>
