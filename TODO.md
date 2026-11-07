@@ -46,7 +46,17 @@
     `<div class="ns-line">`, and a `<style>` in the front template hides
     the lines after the asked one (`:has()`), so the front shows the
     previous lines as cues and the back shows the whole text. No extra note
-    type, so no field-count limit.
+    type, so no field-count limit.- [ ] **Cloze Overlapper-style options for overlapping cloze.** The current
+  `Overlapping` card type always shows every previous line and hides the rest,
+  and relies on CSS `:has()` to hide later lines (unverified on phones). Bring
+  it closer to the Cloze Overlapper add-on: (a) how many previous lines and
+  how many following lines are shown as cues (e.g. `Overlapping 2/1` in the
+  "Card type" column; plain `Overlapping` keeps today's behaviour), (b) group
+  several lines per cloze, (c) drop the `:has()` dependency if Anki's
+  multi-id clozes (`{{c1,2::...}}`) can express the same hiding, so it also
+  works in AnkiDroid and AnkiMobile. Same note type, existing rows must not
+  change unless their Card type changes.
+
 - [x] **Export to a chosen note type.** Let the user pick which Anki note type
   (and so which card design) a table's rows use, instead of always using
   "Notion Sync Card". Needs a per-table setting in the settings dialog and a
