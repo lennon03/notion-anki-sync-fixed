@@ -2005,7 +2005,7 @@ def _guard_cloze(line: str) -> str:
 
 
 def _window_style(spec: OverlapSpec) -> str:
-    """The question-side CSS of a windowed overlapping cloze: every line is
+    """Build the question-side CSS of a windowed overlapping cloze: every line is
     hidden except the asked one, ``before`` previous and ``after`` following
     ones. It lives in the note's own field because an existing note type
     keeps its old template.
