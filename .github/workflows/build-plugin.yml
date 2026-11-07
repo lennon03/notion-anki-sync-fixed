@@ -1,6 +1,10 @@
 name: Build Plugin
 
+# Every push to main or experimental builds a .ankiaddon and keeps it as a
+# workflow artifact. Publishing a release also attaches it to the release.
 on:
+  push:
+    branches: [main, experimental]
   release:
     types: [published]
 
@@ -8,18 +12,31 @@ jobs:
   build-plugin:
 
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@v7
     - name: Set env
-      run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      run: |
+        if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+          VERSION="${GITHUB_REF_NAME}"
+        else
+          VERSION="${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
+        fi
+        echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
     - name: Build plugin
-      uses: thedoctor0/zip-release@a24011d8d445e4da5935a7e73c1f98e22a439464 # master
+      run: |
+        cd notion_sync_addon
+        zip -r "notion-sync-${RELEASE_VERSION}.ankiaddon" . -x '*__pycache__*' '*.pyc'
+    - name: Keep the build
+      uses: actions/upload-artifact@v4
       with:
-        filename: notion-sync-${{ env.RELEASE_VERSION }}.ankiaddon
-        directory: notion_sync_addon
-        exclusions: '*pycache*'
-    - name: Upload plugin
+        name: notion-sync-${{ env.RELEASE_VERSION }}
+        path: notion_sync_addon/notion-sync-${{ env.RELEASE_VERSION }}.ankiaddon
+        if-no-files-found: error
+    - name: Upload plugin to the release
+      if: github.event_name == 'release'
       uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
       with:
         allowUpdates: true
