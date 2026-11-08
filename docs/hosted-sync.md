@@ -1,7 +1,7 @@
 # Hosted sync
 
 Runs the Notion -> Anki sync without Anki open on a desktop. The owner gives
-the site an AnkiWeb login, a Notion token and page links; a worker keeps the
+the site an AnkiWeb login, signs in with Notion and picks pages; a worker keeps the
 AnkiWeb collection in sync with Notion.
 
 ```
@@ -96,7 +96,7 @@ and the download also need `X-Session-Token`.
 | `GET /health` | liveness, no details |
 | `POST /session` | password -> session token (rate limited) |
 | `GET /status` | connection flags, pages, schedule, runs, backups, needed action |
-| `POST /connect` | `ankiweb: {username, password}` and/or `notion_token` (AnkiWeb part rate limited) |
+| `POST /connect` | `ankiweb: {username, password}` (rate limited); Notion connects only through its sign-in |
 | `DELETE /connect` | forget the host key and the token |
 | `POST /notion/oauth/start`, `/finish` | Sign in with Notion; the state is signed by the worker |
 | `GET /notion/pages` | pages the token can read, without table rows |
@@ -148,7 +148,7 @@ Railway: `ENCRYPTION_KEY` (base64 of 32 bytes), `WORKER_API_SECRET`,
 `OWNER_PASSWORD_HASH` (`python -m notion_anki_worker.hash_password`),
 `DATA_DIR` (a volume, default `/data`). For Sign in with Notion, all three of
 `NOTION_CLIENT_ID`, `NOTION_CLIENT_SECRET` and `NOTION_REDIRECT_URI` (the site's
-`/api/notion/callback`); without them the site offers pasting a token only.
+`/api/notion/callback`); without them Notion can't be connected.
 
 Vercel: `WORKER_URL`, `WORKER_API_SECRET`.
 

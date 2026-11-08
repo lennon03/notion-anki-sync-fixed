@@ -64,10 +64,9 @@ class AnkiWebLogin(_Body):
 
 
 class ConnectBody(_Body):
-    """``POST /connect``: either part can be sent alone."""
+    """``POST /connect``: Notion connects through its own sign-in."""
 
-    ankiweb: Optional[AnkiWebLogin] = None
-    notion_token: Optional[SecretStr] = Field(default=None, max_length=512)
+    ankiweb: AnkiWebLogin
 
 
 class ConfigBody(_Body):
@@ -127,10 +126,6 @@ def _client_ip(request: Request) -> str:
     return request.headers.get("x-client-ip") or "unknown"
 
 
-def _check_notion_token(token: str) -> None:
-    NotionClient(token)._request("GET", "/users/me")
-
-
 def _list_notion_pages(token: str) -> List[Dict[str, str]]:
     """List the pages the token can read, without table rows."""
     client = NotionClient(token)
@@ -164,19 +159,6 @@ def _list_notion_pages(token: str) -> List[Dict[str, str]]:
     return pages
 
 
-def _validate_notion(token: str, check: Callable[[str], None]) -> None:
-    try:
-        check(token)
-    except NotionError as e:
-        if e.status == 401:
-            raise ApiError(
-                400, "notion_token_rejected", "Notion rejected this token."
-            ) from None
-        raise ApiError(
-            502, "notion_unavailable", "Could not reach Notion."
-        ) from None
-
-
 def _page_titles(
     token: Optional[str], ids: List[str], previous: Dict[str, str]
 ) -> List[Dict[str, str]]:
@@ -205,7 +187,6 @@ def _needed_action(latest: Optional[Dict[str, Any]]) -> Optional[str]:
 def create_app(
     settings: Settings,
     login: Callable[[str, str, Path], ankiweb.Login] = ankiweb.sync_login,
-    check_notion: Callable[[str], None] = _check_notion_token,
     run_once: Callable[..., pipeline.RunOutcome] = pipeline.run_once,
     start_scheduler: bool = True,
     oauth: Optional[notion_oauth.NotionOAuth] = None,
@@ -300,47 +281,32 @@ def create_app(
     def connect(
         body: ConnectBody, request: Request, _who: str = Depends(session)
     ) -> Dict[str, bool]:
-        if body.ankiweb is None and body.notion_token is None:
-            raise ApiError(422, "invalid_request", "Nothing to connect.")
-        # checked first so a bad token never costs an AnkiWeb attempt
-        notion = (
-            body.notion_token.get_secret_value().strip()
-            if body.notion_token is not None
-            else None
-        )
-        if notion is not None:
-            register(notion)
-            _validate_notion(notion, check_notion)
-        if body.ankiweb is not None:
-            require_idle()
-            if not connect_limit.allow(_client_ip(request)):
-                raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
-            try:
-                result = login(
-                    body.ankiweb.username,
-                    body.ankiweb.password.get_secret_value(),
-                    paths.scratch,
-                )
-            except ankiweb.LoginRejected:
-                raise ApiError(
-                    400,
-                    "ankiweb_login_rejected",
-                    "AnkiWeb rejected this ID or password.",
-                ) from None
-            except ankiweb.LoginUnavailable:
-                raise ApiError(
-                    502, "ankiweb_unavailable", "Could not reach AnkiWeb."
-                ) from None
-            # the local copy may belong to another account
-            pipeline.forget_collection(paths)
-            store.put_secret(st.KEY_HKEY, result.hkey)
-            if result.endpoint:
-                store.put(st.KEY_ENDPOINT, result.endpoint)
-            else:
-                store.delete(st.KEY_ENDPOINT)
-        if notion is not None:
-            store.put_secret(st.KEY_NOTION, notion)
-            store.delete(st.KEY_NOTION_REFRESH, st.KEY_NOTION_WORKSPACE)
+        require_idle()
+        if not connect_limit.allow(_client_ip(request)):
+            raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
+        try:
+            result = login(
+                body.ankiweb.username,
+                body.ankiweb.password.get_secret_value(),
+                paths.scratch,
+            )
+        except ankiweb.LoginRejected:
+            raise ApiError(
+                400,
+                "ankiweb_login_rejected",
+                "AnkiWeb rejected this ID or password.",
+            ) from None
+        except ankiweb.LoginUnavailable:
+            raise ApiError(
+                502, "ankiweb_unavailable", "Could not reach AnkiWeb."
+            ) from None
+        # the local copy may belong to another account
+        pipeline.forget_collection(paths)
+        store.put_secret(st.KEY_HKEY, result.hkey)
+        if result.endpoint:
+            store.put(st.KEY_ENDPOINT, result.endpoint)
+        else:
+            store.delete(st.KEY_ENDPOINT)
         return {"ok": True}
 
     @app.delete("/connect")

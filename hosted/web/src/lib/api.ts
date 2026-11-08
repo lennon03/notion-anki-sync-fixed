@@ -93,8 +93,6 @@ export const api = {
   status: () => request<Status>("/api/worker/status", "GET"),
   connectAnkiWeb: (username: string, password: string) =>
     request("/api/worker/connect", "POST", { ankiweb: { username, password } }),
-  connectNotion: (notion_token: string) =>
-    request("/api/worker/connect", "POST", { notion_token }),
   disconnect: () => request("/api/worker/connect", "DELETE"),
   notionPages: () => request<{ pages: NotionPage[] }>("/api/worker/notion/pages", "GET"),
   savePages: (pages: string[]) => request("/api/worker/config", "PUT", { pages }),

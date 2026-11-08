@@ -21,7 +21,6 @@ import { ApiFailure, api } from "~/lib/api";
 
 function ConnectDialog({
   connected,
-  label,
   title,
   description,
   canSubmit,
@@ -31,7 +30,6 @@ function ConnectDialog({
   children,
 }: {
   connected: boolean;
-  label?: string | undefined;
   title: string;
   description: string;
   canSubmit: boolean;
@@ -70,7 +68,7 @@ function ConnectDialog({
   return (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-        {label ?? (connected ? "Reconnect" : "Connect")}
+        {connected ? "Reconnect" : "Connect"}
       </Button>
       <Dialog open={open} onOpenChange={change}>
         <DialogPopup className="sm:max-w-md">
@@ -144,43 +142,6 @@ export function ConnectAnkiWebDialog({
           required
           value={password}
           onChange={(event) => setPassword(event.target.value)}
-        />
-      </div>
-    </ConnectDialog>
-  );
-}
-
-export function ConnectNotionDialog({
-  connected,
-  label,
-  onDone,
-}: {
-  connected: boolean;
-  label?: string;
-  onDone: () => void;
-}) {
-  const [token, setToken] = useState("");
-
-  return (
-    <ConnectDialog
-      connected={connected}
-      label={label}
-      title="Connect Notion"
-      description="Paste the internal integration token. It's stored encrypted and never shown again."
-      canSubmit={Boolean(token.trim())}
-      submit={() => api.connectNotion(token)}
-      reset={() => setToken("")}
-      onDone={onDone}
-    >
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="notion-token">Integration token</Label>
-        <Input
-          id="notion-token"
-          type="password"
-          autoComplete="off"
-          required
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
         />
       </div>
     </ConnectDialog>

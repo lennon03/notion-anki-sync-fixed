@@ -14,8 +14,6 @@ from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import ScrubbingFormatter, register, scrub
 from notion_anki_worker.store import FULL_SYNC_NEEDED, KEY_SCHEDULE, OK
 
-from notion_sync_addon.notion_api import NotionError
-
 SECRET_TOKEN = "secret_" + "n" * 30
 HKEY = "host-key-do-not-leak"
 PASSWORD = "ankiweb-password-do-not-leak"
@@ -52,7 +50,6 @@ class FakeOAuth:
 class Harness:
     def __init__(self, settings):
         self.logins = []
-        self.notion_error = None
         self.login_error = None
         self.outcome = RunOutcome(OK, "2 added", {"added": 2})
         self.oauth = FakeOAuth()
@@ -61,7 +58,6 @@ class Harness:
         self.app = create_app(
             settings,
             login=self._login,
-            check_notion=self._check,
             run_once=self._run,
             start_scheduler=False,
             oauth=self.oauth,
@@ -83,10 +79,6 @@ class Harness:
             raise self.login_error
         return ankiweb.Login(hkey=HKEY, endpoint="https://sync.example/")
 
-    def _check(self, _token):
-        if self.notion_error:
-            raise self.notion_error
-
     def _run(self, request, _paths, say):
         say(f"log line with {HKEY}")
         self.requests.append(request)
@@ -97,11 +89,19 @@ class Harness:
             "/connect",
             json={
                 "ankiweb": {"username": "me@x.org", "password": PASSWORD},
-                "notion_token": SECRET_TOKEN,
             },
             headers=self.headers,
         )
         assert response.status_code == 200, response.text
+        url = self.client.post(
+            "/notion/oauth/start", headers=self.headers
+        ).json()["url"]
+        finished = self.client.post(
+            "/notion/oauth/finish",
+            json={"code": "the-code", "state": url.split("state=")[1]},
+            headers=self.headers,
+        )
+        assert finished.status_code == 200, finished.text
         return response
 
     def add_page(self):
@@ -207,15 +207,15 @@ def test_rate_limiter_forgets_after_the_window():
 def test_connect_stores_encrypted_and_never_echoes(h):
     response = h.connect()
     assert response.json() == {"ok": True}
-    for leak in (HKEY, PASSWORD, SECRET_TOKEN):
+    for leak in (HKEY, PASSWORD, OAUTH_TOKEN):
         assert leak not in response.text
     status = h.status()
     assert status["ankiweb_connected"] and status["notion_connected"]
-    assert HKEY not in str(status) and SECRET_TOKEN not in str(status)
+    assert HKEY not in str(status) and OAUTH_TOKEN not in str(status)
 
     folder = h.settings.data_dir
     raw = b"".join(p.read_bytes() for p in folder.iterdir() if p.is_file())
-    for leak in (HKEY, PASSWORD, SECRET_TOKEN, "me@x.org"):
+    for leak in (HKEY, PASSWORD, OAUTH_TOKEN, "me@x.org"):
         assert leak.encode() not in raw
 
 
@@ -247,21 +247,6 @@ def test_rejected_login_stores_nothing_and_is_safe_to_show(h):
     assert response.json()["error"] == "ankiweb_login_rejected"
     assert PASSWORD not in response.text
     assert not h.status()["ankiweb_connected"]
-
-
-def test_rejected_notion_token_is_not_stored_and_skips_ankiweb(h):
-    h.notion_error = NotionError("bad", 401)
-    response = h.client.post(
-        "/connect",
-        json={
-            "ankiweb": {"username": "me", "password": PASSWORD},
-            "notion_token": SECRET_TOKEN,
-        },
-        headers=h.headers,
-    )
-    assert response.status_code == 400
-    assert h.logins == []
-    assert not h.status()["notion_connected"]
 
 
 def test_disconnect_forgets_the_credentials(h):
@@ -529,11 +514,19 @@ def test_working_notion_sign_in_is_not_refreshed(h):
     assert h.oauth.refreshes == 0
 
 
-def test_pasting_a_token_replaces_the_sign_in(h):
-    _finish(h, _state(h))
-    h.connect()
-    status = h.status()
-    assert status["notion_workspace"] is None
+def test_a_pasted_notion_token_is_refused_and_not_stored(h):
+    for body in (
+        {"notion_token": SECRET_TOKEN},
+        {
+            "ankiweb": {"username": "me", "password": PASSWORD},
+            "notion_token": SECRET_TOKEN,
+        },
+    ):
+        response = h.client.post("/connect", json=body, headers=h.headers)
+        assert response.status_code == 422
+        assert SECRET_TOKEN not in response.text
+    assert h.logins == []
+    assert not h.status()["notion_connected"]
 
 
 def test_without_a_client_id_notion_sign_in_is_off(settings):

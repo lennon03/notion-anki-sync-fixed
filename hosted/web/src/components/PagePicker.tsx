@@ -34,11 +34,13 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 
 export function PagePicker({
   connected,
+  canSignIn,
   saved,
   onSaved,
   onError,
 }: {
   connected: boolean;
+  canSignIn: boolean;
   saved: Page[];
   onSaved: () => void;
   onError: (text: string) => void;
@@ -48,7 +50,6 @@ export function PagePicker({
   const [pages, setPages] = useState<NotionPage[] | null>(null);
   const [selected, setSelected] = useState<Set<string>>(savedIds);
   const [filter, setFilter] = useState("");
-  const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => setSelected(savedIds), [savedIds]);
@@ -71,7 +72,6 @@ export function PagePicker({
     setBusy(true);
     try {
       await api.savePages(ids);
-      setLink("");
       onSaved();
     } catch (failure) {
       onError(failure instanceof ApiFailure ? failure.message : "Could not save the pages.");
@@ -150,7 +150,7 @@ export function PagePicker({
         <div className="max-h-96 overflow-y-auto">
           {shown.length === 0 ? (
             <p className="px-3 py-3 text-xs text-muted-foreground sm:px-4">
-              No pages found. Share a page with the integration, or add one by link below.
+              No pages found. Use Share more pages below to give access to one.
             </p>
           ) : (
             shown.map((page) => (
@@ -170,28 +170,17 @@ export function PagePicker({
           )}
         </div>
       )}
-      <SettingsRow
-        title="Add a page by link"
-        description="For a page that isn't listed yet. Notion's list can lag behind."
-        control={
-          <>
-            <Input
-              aria-label="Notion page link"
-              placeholder="https://www.notion.so/..."
-              value={link}
-              onChange={(event) => setLink(event.target.value)}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy || !link.trim()}
-              onClick={() => void save([...selected, link.trim()])}
-            >
-              Add
+      {canSignIn ? (
+        <SettingsRow
+          title="Need another page or table?"
+          description="Opens Notion's page picker so you can share more. For a table, choose the page it sits on."
+          control={
+            <Button variant="outline" size="sm" render={<a href="/api/notion/start" />}>
+              Share more pages
             </Button>
-          </>
-        }
-      />
+          }
+        />
+      ) : null}
     </>
   );
 }

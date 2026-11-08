@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ConnectAnkiWebDialog, ConnectNotionDialog } from "~/components/ConnectDialogs";
+import { ConnectAnkiWebDialog } from "~/components/ConnectDialogs";
 import { PagePicker } from "~/components/PagePicker";
 import { BackupsSection, HistorySection, LastRunRow, StatusBadge } from "~/components/RunViews";
 import { SettingsRow, SettingsSection } from "~/components/settings/settingsLayout";
@@ -270,29 +270,19 @@ export function Dashboard() {
                   title="Notion"
                   description={
                     status.notion_workspace
-                      ? `Signed in to ${status.notion_workspace}. The token is stored encrypted on the worker.`
-                      : "The token is stored encrypted on the worker."
+                      ? `Signed in to ${status.notion_workspace}.`
+                      : status.notion_connected
+                        ? "Connected with an older token. Reconnect to sign in with Notion."
+                        : "Sign in with your Notion account and choose what to share."
                   }
                   control={
                     <>
                       <ConnectionBadge connected={status.notion_connected} />
                       {status.notion_oauth_available ? (
-                        <>
-                          <ConnectNotionDialog
-                            connected={status.notion_connected}
-                            label="Use a token"
-                            onDone={() => void refresh()}
-                          />
-                          <Button size="sm" render={<a href="/api/notion/start" />}>
-                            {status.notion_connected ? "Reconnect" : "Connect with Notion"}
-                          </Button>
-                        </>
-                      ) : (
-                        <ConnectNotionDialog
-                          connected={status.notion_connected}
-                          onDone={() => void refresh()}
-                        />
-                      )}
+                        <Button size="sm" render={<a href="/api/notion/start" />}>
+                          {status.notion_connected ? "Reconnect" : "Connect with Notion"}
+                        </Button>
+                      ) : null}
                     </>
                   }
                 />
@@ -302,6 +292,7 @@ export function Dashboard() {
               <SettingsSection title="Notion pages">
                 <PagePicker
                   connected={status.notion_connected}
+                  canSignIn={status.notion_oauth_available}
                   saved={status.pages}
                   onSaved={() => void refresh()}
                   onError={setError}
