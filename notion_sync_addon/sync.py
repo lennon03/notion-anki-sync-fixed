@@ -48,7 +48,13 @@ from typing import (
     Tuple,
 )
 
-from .htmlify import MediaCollector, StrikeTags, render_blocks, render_lines
+from .htmlify import (
+    MediaCollector,
+    StrikeTags,
+    render_blocks,
+    render_lines,
+    rich_text_to_html,
+)
 from .notion_api import (
     BlockSource,
     BlockTree,
@@ -57,6 +63,7 @@ from .notion_api import (
     data_source_of,
     page_title,
 )
+from .pagecards import PageCard, has_cloze, parse_page, rt_text
 
 MODEL_NAME = "Notion Sync Card"
 UNDO_NAME = "Notion Sync"
@@ -685,7 +692,7 @@ def _dict(value: Any) -> dict:
 def _valid_page_entry(value: Any) -> bool:
     return (
         isinstance(value, list)
-        and len(value) == 3
+        and len(value) in (3, 4)  # 4th: page cards were read
         and isinstance(value[0], str)
         and isinstance(value[1], (int, float))
         and isinstance(value[2], list)
@@ -1182,28 +1189,195 @@ def _fetch_page(
             )
             if table is not None:
                 data.tables.append(table)
+        _page_cards(
+            page_id,
+            edited,
+            None,
+            client,
+            tree,
+            media,
+            data,
+            result,
+            read_before=len(cached) > 3 and bool(cached[3]),
+        )
         if result.failures == failures:
             result.pages_out[page_id] = cached
         return
 
     fetched_at = time.time()
+    blocks = tree.children(page_id)
     _collect_page_children(
-        page_id,
-        client,
-        tree,
-        media,
-        data,
-        result,
-        blocks=tree.children(page_id),
+        page_id, client, tree, media, data, result, blocks=blocks
     )
+    _page_cards(page_id, edited, blocks, client, tree, media, data, result)
     # a page with any failure keeps its previous cache entry: a table that
     # could not be read must not vanish from the cached table list
     if edited and result.failures == failures:
-        result.pages_out[page_id] = [
+        entry: list = [
             edited,
             fetched_at,
-            [[t.db_id, t.raw_title] for t in data.tables],
+            [
+                [t.db_id, t.raw_title]
+                for t in data.tables
+                if not t.db_id.startswith(PAGE_CARDS)
+            ],
         ]
+        if result.config.get("page_cards", True):
+            entry.append(1)  # the page's own cards were read
+        result.pages_out[page_id] = entry
+
+
+PAGE_CARDS = "pagecards:"  # db_id prefix of a page's own cards
+
+
+def _numbered(blocks: List[dict]) -> bool:
+    """Tell whether the blocks are a numbered list of two items or more."""
+    items = [b for b in blocks if b.get("type") != "divider"]
+    return len(items) >= 2 and all(
+        b.get("type") == "numbered_list_item" for b in items
+    )
+
+
+def _page_card_type(card: PageCard, answer: List[dict]) -> str:
+    """Return the "Card type" a found card is rendered as ("" = by
+    content): overlapping when options are written after the question or
+    the answer is a numbered list.
+    """
+    if card.spec is not None:
+        rest = re.sub(r"(?i)^overlap(?:ping)?", "", card.spec).strip().lower()
+        rest = re.sub(r"(\d)\s*x", r"\1 x", rest)
+        return f"overlapping {rest}".strip()
+    if card.origin in ("heading", "qa") and _numbered(split_hint(answer)[0]):
+        return "overlapping"
+    return ""
+
+
+def _page_cards(
+    page_id: str,
+    edited: str,
+    blocks: Optional[List[dict]],
+    client: NotionClient,
+    tree: BlockSource,
+    media: MediaCollector,
+    data: PageData,
+    result: SyncResult,
+    read_before: bool = False,
+) -> None:
+    """Read the cards written as text in a page (see pagecards.py).
+
+    ``blocks`` is None when the page itself is unchanged: its cards are
+    then reused, unless one is missing from the cache or has to be checked
+    again, in which case the page's blocks are read.
+    """
+    if not result.config.get("page_cards", True):
+        return
+    marker = PAGE_CARDS + page_id
+    result.db_pages[marker] = page_id
+    table = TableData(title="", db_id=marker, raw_title="")
+    url = "https://www.notion.so/" + page_id
+    if blocks is None:
+        now = time.time()
+        listed = [
+            rid
+            for rid, state in result.previous.rows.items()
+            if state.db_id == marker and state.page_id == page_id
+        ]
+        if listed and all(
+            rid in result.known
+            and is_unchanged(result.known[rid], edited, rid, now)
+            for rid in listed
+        ):
+            for rid in listed:
+                result.fetched[rid] = replace(result.known[rid])
+                table.rows.append(
+                    RowCard(rid, "", "", url=url, unchanged=True)
+                )
+            data.tables.append(table)
+            return
+        if not listed and read_before:
+            return  # read before, and it held no card
+        try:
+            blocks = tree.children(page_id)
+        except NotionError as e:
+            _fail(
+                result,
+                f"Page {data.title}: {e}",
+                page_id=page_id,
+                problem=f"Page '{data.title}': {_reason(e)}",
+            )
+            return
+    seen: Set[str] = set()
+    for card in parse_page(blocks):
+        if card.source_id in seen:
+            continue
+        seen.add(card.source_id)
+        recorder = _RecordingTree(tree)
+        strike = StrikeTags(recorder)
+        fetched_at = time.time()
+        try:
+            row = _render_page_card(card, url, media, strike, result)
+        except NotionError as e:
+            result.protected.add(card.source_id)
+            _fail(
+                result,
+                f"Card in '{data.title}': {e}",
+                page_id=page_id,
+                problem=f"Card in '{data.title}': {_reason(e)}",
+            )
+            continue
+        if row is None:
+            continue
+        row.tags = [TAG_PREFIX + t for t in clean_tags(strike.tags)]
+        result.fetched[card.source_id] = RowState(
+            edited,
+            fetched_at,
+            "",
+            page_id,
+            marker,
+            1 if recorder.volatile else 0,
+        )
+        table.rows.append(row)
+    if table.rows:
+        data.tables.append(table)
+
+
+def _render_page_card(
+    card: PageCard,
+    url: str,
+    media: MediaCollector,
+    tree: StrikeTags,
+    result: SyncResult,
+) -> Optional[RowCard]:
+    """Render a found card; None if nothing is left of it."""
+    title_rts = tree.strip_rich(card.title)
+    title = rt_text(title_rts).strip()
+    if card.origin == "cloze":
+        front = rich_text_to_html(title_rts).strip()
+        if not has_cloze(title):
+            return None
+        return RowCard(card.source_id, front, "", url=url, kind="cloze")
+    if not title:
+        return None
+    answer = tree.strip_blocks(card.blocks)
+    kind, back, hint, lines, overlap = _render_blocks(
+        answer, title, _page_card_type(card, answer), media, tree, result
+    )
+    if kind == "cloze" and has_cloze(title):
+        front = rich_text_to_html(title_rts).strip()
+    elif kind == "basic":
+        front = html.escape(title, quote=False)
+    else:
+        front = title
+    return RowCard(
+        card.source_id,
+        front,
+        back,
+        url=url,
+        context_html=hint,
+        kind=kind,
+        lines=lines,
+        overlap=overlap,
+    )
 
 
 def _collect_page_children(
@@ -1556,7 +1730,21 @@ def _render_row(
     column decides the kind, otherwise a cloze marker in the title or page
     makes it a cloze.
     """
-    blocks, hint_blocks = split_hint(tree.children(row_id))
+    return _render_blocks(
+        tree.children(row_id), title, card_type, media, tree, result
+    )
+
+
+def _render_blocks(
+    all_blocks: List[dict],
+    title: str,
+    card_type: str,
+    media: MediaCollector,
+    tree: Any,
+    result: SyncResult,
+) -> Tuple[str, str, str, List[str], Optional[OverlapSpec]]:
+    """Render the blocks of a row or page card (see ``_render_row``)."""
+    blocks, hint_blocks = split_hint(all_blocks)
     hint = ""
     if hint_blocks:
         body = render_blocks(hint_blocks, media, tree)
@@ -2265,7 +2453,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     )
                     if home is None and deck_id is None:
                         deck_id = get_or_create_deck(
-                            col, f"{page.deck_name}::{table.title}"
+                            col, _deck_name(page, table)
                         )
                     note = Note(col, target)
                     _set_fields(note, front, back, plan)
@@ -2330,6 +2518,13 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
     stats["removed"] = removed
     result.sources_after = (set(notes) - gone) | added
     return stats
+
+
+def _deck_name(page: "PageData", table: "TableData") -> str:
+    """Full deck name of a table (the page's own cards: the page's deck)."""
+    if table.db_id.startswith(PAGE_CARDS):
+        return page.deck_name
+    return f"{page.deck_name}::{table.title}"
 
 
 def _chosen_model(
@@ -2461,7 +2656,7 @@ def _move_renamed(
                 or (page_id and page_id in result.failed_pages)
             ):
                 continue
-            name = f"{page.deck_name}::{table.title}"
+            name = _deck_name(page, table)
             result.decks_out[db_id] = name
             old = old_names.get(db_id)
             if not old or old == name:

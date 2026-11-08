@@ -185,6 +185,14 @@ class StrikeTags:
         """Return the child blocks without their struck-through text."""
         return [self._strip(b) for b in self._tree.children(block_id)]
 
+    def strip_blocks(self, blocks: List[dict]) -> List[dict]:
+        """Return ``blocks`` without their struck-through text."""
+        return [self._strip(b) for b in blocks]
+
+    def strip_rich(self, rts: List[dict]) -> List[dict]:
+        """Return rich text without its struck-through text."""
+        return self._clean(rts)
+
     def _strip(self, block: dict) -> dict:
         btype = block.get("type")
         body = block.get(btype) if isinstance(btype, str) else None

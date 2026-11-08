@@ -873,6 +873,7 @@ class FakeNotion:
         self.ds = {}  # db id -> current data source id (default "ds-<db>")
         self.trashed = {}  # row id -> db id: rows moved to Notion's trash
         self.props = {}  # row id -> extra Notion property objects
+        self.page_blocks = {}  # page id -> blocks written on the page itself
 
     def __call__(self, token):  # stands in for the NotionClient class
         return self
@@ -920,7 +921,7 @@ class FakeNotion:
                     "child_database": {"title": self.tables[db]["title"]},
                 }
                 for db in self.pages[bid]["tables"]
-            ]
+            ] + list(self.page_blocks.get(bid, []))
         for table in self.tables.values():
             if bid in table["rows"]:
                 if ("row", bid) in self.fail:
