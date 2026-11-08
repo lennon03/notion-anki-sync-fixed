@@ -34,7 +34,7 @@ Cards can contain:
 
 ## New features
 
-Cloze and overlapping cloze, strikethrough tags, a sync checkbox, a `#### Hint` section, card styles,
+Cloze and overlapping cloze, strikethrough tags, a sync checkbox, a `#### Hint` section, cards written in normal pages (headings, `Q:`/`A:`, `::`, cloze, numbered lists), card styles,
 code highlighting and more are explained in
 [docs/new_features.html](docs/new_features.html).
 

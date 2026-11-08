@@ -67,6 +67,24 @@
   <li>There is no Tags column any more.</li>
 </ul>
 
+<h2>Cards in a normal page</h2>
+<p>The text of a configured page (not only its tables) can hold cards. They go in the page's own deck. Four formats, no setup:</p>
+<table>
+  <tr><th>Write this</th><th>You get</th></tr>
+  <tr><td><code>### Question?</code> or <code>#### Question?</code>, then the answer under it</td><td>A card. The answer is everything up to the next heading or divider. A <code>#### Hint</code> inside it works as above, and a <code>---</code> after the hint does not end the answer.</td></tr>
+  <tr><td><code>Q: question</code> then <code>A: answer</code></td><td>A card. The answer runs until the next <code>Q:</code>, a heading, a divider or an empty line. Case does not matter, <code>Question:</code> and <code>Answer:</code> work. Shift+Enter between the two lines works too.</td></tr>
+  <tr><td><code>front :: back</code> on one line (spaces around <code>::</code>)</td><td>A card, like Obsidian's <code>Question::Answer</code>.</td></tr>
+  <tr><td>A paragraph, list item, quote or callout with <code>{{c1::cloze}}</code></td><td>A cloze card, one per block. A heading with a cloze and no answer is a cloze card too.</td></tr>
+</table>
+<p><strong>Remember a list.</strong> If the answer of a heading or <code>Q:</code> is a numbered list (2 items or more), the card is an overlapping cloze like Cloze Overlapper: each card hides one item and shows the earlier ones. Write options after the question to change it, for example <code>### Steps [2/1 x2]</code> (same options as the <code>Overlapping</code> Card type: <code>[x2]</code>, <code>[2/1]</code>, <code>[overlap]</code>). The options also work on a non-list answer, and each block is then a line.</p>
+<ul>
+  <li>Strikethrough tags and the Hint section work inside these cards too.</li>
+  <li>A heading with nothing under it is just a title, not a card.</li>
+  <li>Toggles are not read as cards. Content inside a toggle in an answer is shown as usual.</li>
+  <li>Each card is tied to its question's block, so editing the text updates the same note, and deleting the block removes the note.</li>
+  <li>Turn it off with <code>"page_cards": false</code> in the add-on config.</li>
+</ul>
+
 <h2>Choose which rows sync</h2>
 <p>Add an <code>Anki</code> checkbox column. Ticked rows (and every row in a table without the column) sync. Unticking a row that already has a card <strong>suspends</strong> it and tags it <code>notion-sync::unchecked</code>; it is not deleted. Tick it again to unsuspend. Cards you suspended yourself are never unsuspended.</p>
 

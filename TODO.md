@@ -180,6 +180,14 @@
   an unchanged row keeps its note's tags. `RENDER_VERSION` is 5, so every row
   is downloaded once after updating.
 
+- [x] **Cards from a normal page.** Page text (not only tables) is parsed:
+  `###`/`####` headings with the answer under them, `Q:`/`A:`, `front :: back`
+  and `{{c1::}}` blocks. A numbered-list answer becomes an overlapping cloze,
+  options go in brackets after the question (`[2/1 x2]`). Toggles are not
+  read. Cards use the question block's id as Source and live in the page's
+  deck; `page_cards: false` turns it off. Not done: Obsidian's `?` separator,
+  `==highlight==` clozes and reversed (`:::`) cards.
+
 ## Choosing what syncs
 
 - [x] **Checkbox column to choose which rows sync.** A checkbox property
