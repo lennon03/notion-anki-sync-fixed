@@ -14,6 +14,8 @@ from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import ScrubbingFormatter, register, scrub
 from notion_anki_worker.store import FULL_SYNC_NEEDED, KEY_SCHEDULE, OK
 
+from notion_sync_addon.notion_api import NotionError
+
 SECRET_TOKEN = "secret_" + "n" * 30
 HKEY = "host-key-do-not-leak"
 PASSWORD = "ankiweb-password-do-not-leak"
@@ -47,8 +49,93 @@ class FakeOAuth:
         return self.works
 
 
+def _block(block_id, kind="paragraph", children=False, **extra):
+    return {
+        "id": block_id,
+        "type": kind,
+        "has_children": children,
+        kind: extra,
+    }
+
+
+class FakeReader:
+    """A Notion that serves a small page and counts what is asked."""
+
+    ROW = "1" * 32
+    TABLE = "2" * 32
+    DATABASE = "3" * 32
+    TOGGLE = "4" * 32
+
+    def __init__(self, token, log):
+        self.token = token
+        self.log = log
+
+    def _ask(self, *call):
+        self.log.append((self.token, *call))
+        if self.token == "rejected":
+            raise NotionError("Notion API error 401 for /pages/x", status=401)
+
+    def get_page(self, page_id):
+        self._ask("page", page_id)
+        if page_id != PAGE:
+            raise NotionError("missing", status=404)
+        return {
+            "id": "-".join(
+                [PAGE[:8], PAGE[8:12], PAGE[12:16], PAGE[16:20], PAGE[20:]]
+            ),
+            "properties": {
+                "t": {"type": "title", "title": [{"plain_text": "Lessons"}]}
+            },
+        }
+
+    def get_block_children(self, block_id):
+        self._ask("children", block_id)
+        if block_id == PAGE:
+            return [
+                _block("5" * 32, "heading_1"),
+                _block(self.DATABASE, "child_database", title="Defs"),
+                _block(self.TOGGLE, "toggle", children=True),
+            ]
+        if block_id == self.TOGGLE:
+            return [_block("6" * 32, "child_database", title="")]
+        if block_id == self.ROW:
+            return [_block(self.TOGGLE, "toggle", children=True)]
+        return [_block("7" * 32)]
+
+    def get_database(self, database_id):
+        self._ask("database", database_id)
+        if database_id not in (self.DATABASE, "6" * 32):
+            raise NotionError("missing", status=404)
+        if database_id == "6" * 32:
+            return {"data_sources": [{"id": "8" * 32, "name": "Inner"}]}
+        return {"data_sources": [{"id": self.TABLE, "name": "Source name"}]}
+
+    def query_data_source(self, source_id, title_only=False):
+        self._ask("rows", source_id)
+        if source_id != self.TABLE:
+            raise NotionError("missing", status=404)
+        assert title_only
+        return [
+            {
+                "id": "-".join(
+                    [
+                        self.ROW[:8],
+                        self.ROW[8:12],
+                        self.ROW[12:16],
+                        self.ROW[16:20],
+                        self.ROW[20:],
+                    ]
+                ),
+                "properties": {
+                    "t": {"type": "title", "title": [{"plain_text": "Row"}]}
+                },
+            }
+        ]
+
+
 class Harness:
     def __init__(self, settings):
+        self.notion_calls = []
         self.logins = []
         self.login_error = None
         self.outcome = RunOutcome(OK, "2 added", {"added": 2})
@@ -64,6 +151,7 @@ class Harness:
             list_pages=lambda token: [
                 {"id": PAGE, "title": "From Notion", "parent": ""}
             ],
+            notion_client=lambda token: FakeReader(token, self.notion_calls),
         )
         self.client = TestClient(self.app)
         token = self.client.post(
@@ -585,3 +673,116 @@ def test_connections_cant_change_during_a_run(h):
 
 def test_blocking_statuses_cover_both_owner_actions():
     assert FULL_SYNC_NEEDED in runner.BLOCKING_STATUSES
+
+
+EXPORT_ROUTES = (
+    f"/notion/export/page/{PAGE}",
+    f"/notion/export/table/{FakeReader.TABLE}/rows",
+    f"/notion/export/blocks/{PAGE}",
+)
+
+
+@pytest.mark.parametrize("path", EXPORT_ROUTES)
+def test_export_routes_need_the_secret_and_a_session(h, path):
+    _finish(h, _state(h))
+    assert h.client.get(path).status_code == 401
+    assert h.client.get(path, headers=SITE).status_code == 401
+    assert h.client.get(path, headers=h.headers).status_code == 200
+    assert h.notion_calls
+
+
+@pytest.mark.parametrize("path", EXPORT_ROUTES)
+def test_export_routes_need_notion_connected(h, path):
+    response = h.client.get(path, headers=h.headers)
+    assert response.status_code == 409
+    assert response.json()["error"] == "not_connected"
+    assert h.notion_calls == []
+
+
+def test_export_routes_only_read(h):
+    for method in ("post", "put", "delete", "patch"):
+        for path in EXPORT_ROUTES:
+            sent = getattr(h.client, method)(path, headers=h.headers)
+            assert sent.status_code in (404, 405)
+
+
+def test_export_page_lists_tables_at_any_depth(h):
+    _finish(h, _state(h))
+    body = h.client.get(
+        f"/notion/export/page/{PAGE}", headers=h.headers
+    ).json()
+    assert body["name"] == "Lessons"
+    assert body["tables"] == [
+        {"id": FakeReader.TABLE, "name": "Defs"},
+        {"id": "8" * 32, "name": "Inner"},
+    ]
+    assert {c[0] for c in h.notion_calls} == {OAUTH_TOKEN}
+
+
+def test_export_page_accepts_a_table_id_too(h):
+    _finish(h, _state(h))
+    body = h.client.get(
+        f"/notion/export/page/{FakeReader.TABLE}", headers=h.headers
+    ).json()
+    assert body["tables"] == [{"id": FakeReader.TABLE, "name": "Notion table"}]
+
+
+def test_export_rows_and_blocks(h):
+    _finish(h, _state(h))
+    rows = h.client.get(
+        f"/notion/export/table/{FakeReader.TABLE}/rows", headers=h.headers
+    ).json()["rows"]
+    assert rows == [{"id": FakeReader.ROW, "title": "Row"}]
+    blocks = h.client.get(
+        f"/notion/export/blocks/{FakeReader.ROW}", headers=h.headers
+    ).json()["blocks"]
+    assert blocks[0]["children"][0]["id"] == "6" * 32
+
+
+def test_export_rejects_ids_that_are_not_notion_ids(h):
+    _finish(h, _state(h))
+    for bad in ("not-an-id", "a" * 31, "..%2F..%2Fusers%2Fme"):
+        response = h.client.get(
+            f"/notion/export/page/{bad}", headers=h.headers
+        )
+        assert response.status_code in (404, 422)
+        assert h.notion_calls == []
+
+
+def test_export_unreadable_page_is_a_fixed_message(h):
+    _finish(h, _state(h))
+    response = h.client.get(
+        f"/notion/export/page/{'9' * 32}", headers=h.headers
+    )
+    assert response.status_code == 404
+    assert response.json()["error"] == "not_shared"
+    assert "missing" not in response.text
+
+
+def test_export_renews_a_rejected_sign_in_once(h):
+    _finish(h, _state(h))
+    h.app.state.store.put_secret("notion_token", "rejected")
+    response = h.client.get(f"/notion/export/page/{PAGE}", headers=h.headers)
+    assert response.status_code == 200
+    assert h.oauth.refreshes == 1
+    assert h.notion_calls[0][0] == "rejected"
+    assert h.notion_calls[-1][0] == OAUTH_TOKEN + "2"
+
+
+def test_export_reports_a_rejected_sign_in_without_a_refresh_token(h):
+    _finish(h, _state(h))
+    h.app.state.store.put_secret("notion_token", "rejected")
+    h.app.state.store.delete("notion_refresh_token")
+    response = h.client.get(f"/notion/export/page/{PAGE}", headers=h.headers)
+    assert response.json()["error"] == "notion_token_rejected"
+    assert "Notion API error" not in response.text
+
+
+def test_export_refuses_more_than_a_request_can_read(h, monkeypatch):
+    _finish(h, _state(h))
+    monkeypatch.setattr("notion_anki_worker.export_read.MAX_TREE_BLOCKS", 1)
+    response = h.client.get(
+        f"/notion/export/blocks/{FakeReader.ROW}", headers=h.headers
+    )
+    assert response.status_code == 413
+    assert response.json()["error"] == "too_large"

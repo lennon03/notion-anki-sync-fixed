@@ -5,14 +5,21 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from notion_anki_worker import ankiweb, crypto, notion_oauth, pipeline
+from notion_anki_worker import (
+    ankiweb,
+    crypto,
+    export_read,
+    notion_oauth,
+    pipeline,
+)
 from notion_anki_worker import runner as rn
 from notion_anki_worker import store as st
 from notion_anki_worker.config import Settings
@@ -25,6 +32,8 @@ from notion_sync_addon.notion_api import NotionClient, NotionError, page_title
 from notion_sync_addon.sync import canonical_page_id
 
 log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 OWNER = "owner"
 SCHEDULES = (0, 15, 30, 60, 180, 360, 720, 1440)
@@ -191,6 +200,7 @@ def create_app(
     start_scheduler: bool = True,
     oauth: Optional[notion_oauth.NotionOAuth] = None,
     list_pages: Callable[[str], List[Dict[str, str]]] = _list_notion_pages,
+    notion_client: Callable[[str], NotionClient] = NotionClient,
 ) -> FastAPI:
     """Build the app."""
     oauth = oauth or notion_oauth.from_settings(settings)
@@ -367,6 +377,101 @@ def create_app(
             raise ApiError(
                 502, "notion_unavailable", "Could not reach Notion."
             ) from None
+
+    refresh_lock = threading.Lock()
+
+    def renewed_token(rejected: str) -> Optional[str]:
+        """Swap a rejected Notion sign-in for a fresh one, if possible."""
+        with refresh_lock:
+            current = store.get_secret(st.KEY_NOTION)
+            if current and current != rejected:
+                return current  # another request already renewed it
+            refresh = store.get_secret(st.KEY_NOTION_REFRESH)
+            if oauth is None or not refresh:
+                return None
+            try:
+                tokens = oauth.refresh(refresh)
+            except notion_oauth.OAuthError:
+                return None
+            store.put_secret(st.KEY_NOTION, tokens.access)
+            store.put_secret(st.KEY_NOTION_REFRESH, tokens.refresh or refresh)
+            return tokens.access
+
+    def notion_read(read: Callable[[NotionClient], T]) -> T:
+        """Run a read-only Notion lookup with the stored sign-in.
+
+        Notion's own errors never reach the response: they can quote the
+        request, so each one becomes a fixed message.
+        """
+        try:
+            token = store.get_secret(st.KEY_NOTION)
+        except crypto.DecryptError:
+            token = None
+        if not token:
+            raise ApiError(409, "not_connected", "Connect Notion first.")
+        try:
+            try:
+                return read(notion_client(token))
+            except NotionError as e:
+                if e.status != 401:
+                    raise
+                fresh = renewed_token(token)
+                if fresh is None:
+                    raise
+                return read(notion_client(fresh))
+        except export_read.TooLarge:
+            raise ApiError(
+                413, "too_large", "That is more than one export can read."
+            ) from None
+        except NotionError as e:
+            if e.status == 401:
+                raise ApiError(
+                    400, "notion_token_rejected", "Notion rejected this token."
+                ) from None
+            if not e.transient and e.status in (400, 403, 404):
+                raise ApiError(
+                    404,
+                    "not_shared",
+                    "Notion can't find this. Share it with the integration.",
+                ) from None
+            raise ApiError(
+                502, "notion_unavailable", "Could not reach Notion."
+            ) from None
+
+    def export_id(raw: str) -> str:
+        try:
+            return export_read.valid_id(raw)
+        except NotionError:
+            raise ApiError(
+                422, "invalid_id", "That is not a Notion page id."
+            ) from None
+
+    @app.get("/notion/export/page/{notion_id}")
+    def export_page(
+        notion_id: str, _who: str = Depends(session)
+    ) -> Dict[str, Any]:
+        ident = export_id(notion_id)
+        return notion_read(lambda client: export_read.describe(client, ident))
+
+    @app.get("/notion/export/table/{notion_id}/rows")
+    def export_rows(
+        notion_id: str, _who: str = Depends(session)
+    ) -> Dict[str, Any]:
+        ident = export_id(notion_id)
+        rows = notion_read(
+            lambda client: export_read.table_rows(client, ident)
+        )
+        return {"rows": rows}
+
+    @app.get("/notion/export/blocks/{notion_id}")
+    def export_blocks(
+        notion_id: str, _who: str = Depends(session)
+    ) -> Dict[str, Any]:
+        ident = export_id(notion_id)
+        blocks = notion_read(
+            lambda client: export_read.block_tree(client, ident)
+        )
+        return {"blocks": blocks}
 
     @app.put("/config")
     def config(
