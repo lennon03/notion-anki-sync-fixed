@@ -1,0 +1,4 @@
+anki==26.9.4
+cryptography==50.0.2
+fastapi==0.162.2
+uvicorn==0.54.0

@@ -133,3 +133,11 @@ junit.xml
 
 # Built add-on packages
 *.ankiaddon
+
+# Hosted site (hosted/web)
+node_modules/
+.next/
+.vercel/
+.railway/
+# hosted/web/src/lib is source code, not a Python build folder
+!hosted/web/src/lib/

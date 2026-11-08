@@ -46,3 +46,29 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           make test
+
+  worker:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r hosted/worker/requirements-dev.txt
+      - name: Lint worker
+        run: |
+          black --check hosted/worker
+          isort --check-only --settings-path pyproject.toml hosted/worker
+          flake8 hosted/worker
+          pydocstyle hosted/worker/notion_anki_worker
+          MYPYPATH=.:hosted/worker mypy --config-file pyproject.toml -p notion_anki_worker
+      - name: Test worker
+        working-directory: hosted/worker
+        run: |
+          pytest tests
