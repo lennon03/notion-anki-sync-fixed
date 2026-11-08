@@ -144,3 +144,5 @@ node_modules/
 hosted/web/next-env.d.ts
 *.tsbuildinfo
 .turbo/
+# Made by hosted/web/scripts/inline-export-assets.mjs before every build
+hosted/web/src/lib/export/assets.generated.ts
