@@ -142,6 +142,7 @@ The repository is a Turborepo with two workspaces, `hosted/web` and
 push to `experimental` deploys whichever side it touches: Railway watches
 `hosted/worker/**` and `notion_sync_addon/**`, and Vercel skips the build when
 `turbo-ignore` finds `hosted/web` unaffected.
+Neither host waits for CI, so a push that fails the checks still deploys.
 
 **Railway's free plan forces the service to sleep when idle.** The scheduler
 runs inside the worker, so while it sleeps no scheduled sync fires. Any request
