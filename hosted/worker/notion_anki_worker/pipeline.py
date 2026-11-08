@@ -254,7 +254,9 @@ def _bring_up_to_date(
 
 def _notes_signature(col: Collection) -> List[int]:
     """Change whenever a note is added, edited or deleted (not reviewed)."""
+    assert col.db is not None
     row = col.db.first("select count(), coalesce(max(mod), 0) from notes")
+    assert row is not None
     return [int(row[0]), int(row[1])]
 
 
