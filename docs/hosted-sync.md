@@ -129,3 +129,16 @@ Railway: `ENCRYPTION_KEY` (base64 of 32 bytes), `WORKER_API_SECRET`,
 `DATA_DIR` (a volume, default `/data`).
 
 Vercel: `WORKER_URL`, `WORKER_API_SECRET`.
+
+## Deployment
+
+- Worker: Railway service `worker` in the project `tranquil-communication`,
+  volume at `/data`, built from `hosted/worker/Dockerfile` with the repository
+  root as context (`RAILWAY_DOCKERFILE_PATH`).
+- Site: Vercel project `notion-anki-sync`, root directory `hosted/web`.
+
+**Railway's free plan forces the service to sleep when idle.** The scheduler
+runs inside the worker, so while it sleeps no scheduled sync fires. Any request
+wakes it (opening the site does), and an overdue sync then starts within about
+30 seconds. For a schedule that runs unattended, move to a paid plan and turn
+sleeping off, or have something call `/health` regularly.
