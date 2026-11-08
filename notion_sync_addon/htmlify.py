@@ -205,10 +205,9 @@ class StrikeTags:
         kept: List[dict] = []
         run: List[str] = []
         for rt in rts:
-            struck = (
-                rt.get("type", "text") == "text"
-                and (rt.get("annotations") or {}).get("strikethrough")
-            )
+            struck = rt.get("type", "text") == "text" and (
+                rt.get("annotations") or {}
+            ).get("strikethrough")
             if struck:
                 run.append((rt.get("text") or {}).get("content", ""))
                 continue

@@ -2,12 +2,7 @@
 """The "#### Hint" section: a collapsed hint after the card's Back."""
 
 from notion_sync_addon.sync import RowState, split_hint
-from tests.test_htmlify_and_sync import (
-    DB1,
-    _image,
-    _para,
-    _rid,
-)
+from tests.test_htmlify_and_sync import DB1, _image, _para, _rid
 
 ROW = _rid(0)
 

@@ -36,7 +36,6 @@ import unicodedata
 import zlib
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from html import escape
 from typing import (
     Any,
     Callable,
@@ -49,12 +48,7 @@ from typing import (
     Tuple,
 )
 
-from .htmlify import (
-    MediaCollector,
-    StrikeTags,
-    render_blocks,
-    render_lines,
-)
+from .htmlify import MediaCollector, StrikeTags, render_blocks, render_lines
 from .notion_api import (
     BlockSource,
     BlockTree,
