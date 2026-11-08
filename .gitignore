@@ -143,3 +143,4 @@ node_modules/
 !hosted/web/src/lib/
 hosted/web/next-env.d.ts
 *.tsbuildinfo
+.turbo/

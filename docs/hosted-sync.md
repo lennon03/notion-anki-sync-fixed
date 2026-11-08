@@ -137,6 +137,12 @@ Vercel: `WORKER_URL`, `WORKER_API_SECRET`.
   root as context (`RAILWAY_DOCKERFILE_PATH`).
 - Site: Vercel project `notion-anki-sync`, root directory `hosted/web`.
 
+The repository is a Turborepo with two workspaces, `hosted/web` and
+`hosted/worker` (`npm run build`, `lint`, `test`, `typecheck` at the root). A
+push to `experimental` deploys whichever side it touches: Railway watches
+`hosted/worker/**` and `notion_sync_addon/**`, and Vercel skips the build when
+`turbo-ignore` finds `hosted/web` unaffected.
+
 **Railway's free plan forces the service to sleep when idle.** The scheduler
 runs inside the worker, so while it sleeps no scheduled sync fires. Any request
 wakes it (opening the site does), and an overdue sync then starts within about

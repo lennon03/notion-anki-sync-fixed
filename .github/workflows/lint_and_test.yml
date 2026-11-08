@@ -57,21 +57,18 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r hosted/worker/requirements-dev.txt
-      - name: Lint worker
-        run: |
-          black --check hosted/worker
-          isort --check-only --settings-path pyproject.toml hosted/worker
-          flake8 hosted/worker
-          pydocstyle hosted/worker/notion_anki_worker
-          MYPYPATH=.:hosted/worker mypy --config-file pyproject.toml -p notion_anki_worker
-      - name: Test worker
-        working-directory: hosted/worker
-        run: |
-          pytest tests
+          npm ci
+      - name: Lint and test worker
+        env:
+          MYPYPATH: ${{ github.workspace }}
+        run: npx turbo run lint test --filter=notion-anki-sync-worker
 
   site:
 
@@ -83,13 +80,6 @@ jobs:
         with:
           node-version: 24
       - name: Install dependencies
-        working-directory: hosted/web
         run: npm ci
-      - name: Typecheck and build
-        working-directory: hosted/web
-        env:
-          WORKER_URL: http://127.0.0.1:8000
-          WORKER_API_SECRET: not-a-real-secret
-        run: |
-          npm run build
-          npm run typecheck
+      - name: Build and typecheck site
+        run: npx turbo run build typecheck --filter=notion-anki-sync-web
