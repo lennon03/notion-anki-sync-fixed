@@ -148,7 +148,8 @@
   can't contain spaces), and that only tags the add-on added are removed when
   they disappear from Notion, so tags added by hand in Anki are kept.
   - *Decision:* a "Tags" column only (multi-select, select or text split on
-    commas). Strikethrough-as-tags is rejected: it would remove text from
+    commas). *Superseded:* tags now come from strikethrough text in the page
+    (the Tags column is gone); see the note after this item. Strikethrough-as-tags was rejected: it would remove text from
     existing cards where strikethrough is content. Tags are cleaned (spaces
     -> `_`, quotes dropped, `::` kept for hierarchy) and put under
     `Notion::`; the add-on owns exactly the tags under `Notion::`, so tags
@@ -169,6 +170,15 @@
     day (the row's last-edited time doesn't move when the linked page
     changes), so a no-op sync makes no extra request. A linked page the
     integration can't read is shown as a link with a warning.
+
+- [x] **Strikethrough tags and `#### Hint` context (replace the Tags and
+  Context columns).** Struck-through text in a row's page becomes `Notion::`
+  tags (split at commas) and is removed from the card; code and equation blocks
+  are left alone. A heading 4 called "Hint" starts a collapsed Hint section on
+  the back, ended by a divider (`---`) or the end of the page; the rest of the
+  page stays the card. Tags are now only known after a row is downloaded, so
+  an unchanged row keeps its note's tags. `RENDER_VERSION` is 5, so every row
+  is downloaded once after updating.
 
 ## Choosing what syncs
 

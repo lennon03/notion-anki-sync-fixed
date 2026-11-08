@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Row properties: tags, the sync checkbox, and the note type registry."""
+"""Row properties, struck-through tags, the sync checkbox and the note type
+registry."""
 
 import hashlib
 
@@ -107,44 +108,28 @@ def test_row_columns_plain_text_of_every_property_type():
 def test_row_columns_special_columns():
     props = {
         " anki ": {"type": "checkbox", "checkbox": False},
-        "TAGS": {
-            "type": "multi_select",
-            "multi_select": [{"name": "A b"}, {"name": "a  B"}, {"name": ""}],
-        },
         "card TYPE": {"type": "select", "select": {"name": "Cloze"}},
-        "context": {"type": "relation", "relation": [{"id": "ab-cd-ef"}]},
     }
     cols = row_columns(_row(props), {})
     assert cols.sync is False
-    assert cols.tags == ["A_b"]
     assert cols.card_type == "cloze"
-    assert cols.context == ["abcdef"]
 
 
 def test_row_columns_no_columns_and_disabled_columns():
     props = {
         "Anki": {"type": "checkbox", "checkbox": False},
-        "Tags": {"type": "multi_select", "multi_select": [{"name": "t"}]},
         "Card type": {"type": "select", "select": {"name": "Cloze"}},
-        "Context": {"type": "url", "url": "https://x.org"},
     }
     assert row_columns(_row({}), {}) == RowColumns()
     off = {
         "sync_column": "",
-        "tags_column": "",
         "card_type_column": "",
-        "context_column": "",
     }
     cols = row_columns(_row(props), off)
-    assert (cols.sync, cols.tags, cols.card_type, cols.context) == (
-        None,
-        [],
-        "",
-        [],
-    )
-    renamed = {"sync_column": "Export", "tags_column": "Labels"}
+    assert (cols.sync, cols.card_type) == (None, "")
+    renamed = {"sync_column": "Export"}
     cols = row_columns(_row(props), renamed)
-    assert cols.sync is None and cols.tags == []
+    assert cols.sync is None
     props["Export"] = {"type": "checkbox", "checkbox": True}
     assert row_columns(_row(props), renamed).sync is True
 
@@ -154,33 +139,6 @@ def test_row_columns_sync_formula_and_wrong_types():
     assert row_columns(_row({"Anki": formula}), {}).sync is False
     text = {"type": "rich_text", "rich_text": [_rt("no")]}
     assert row_columns(_row({"Anki": text}), {}).sync is None
-
-
-def test_row_columns_tag_sources_and_context_sources():
-    sel = {"Tags": {"type": "select", "select": {"name": "one two"}}}
-    assert row_columns(_row(sel), {}).tags == ["one_two"]
-    text = {
-        "Tags": {"type": "rich_text", "rich_text": [_rt("a, b c ,,A")]},
-    }
-    assert row_columns(_row(text), {}).tags == ["a", "b_c"]
-    url = {"Context": {"type": "url", "url": "https://x.org/p"}}
-    assert row_columns(_row(url), {}).context == ["https://x.org/p"]
-    rich = {
-        "Context": {
-            "type": "rich_text",
-            "rich_text": [
-                _rt("see", href="https://y.org"),
-                _rt(
-                    "page",
-                    type="mention",
-                    mention={"type": "page", "page": {"id": "12-34"}},
-                    href="https://notion.so/1234",
-                ),
-                _rt("plain"),
-            ],
-        }
-    }
-    assert row_columns(_row(rich), {}).context == ["https://y.org", "1234"]
 
 
 def test_clean_tag():
@@ -212,13 +170,38 @@ def test_fingerprint_without_tags_is_the_old_formula():
 # --------------------------------------------------------------------- #
 
 
-def _tags(names):
+def _struck(text):
     return {
-        "Tags": {
-            "type": "multi_select",
-            "multi_select": [{"name": n} for n in names],
-        }
+        "type": "text",
+        "plain_text": text,
+        "text": {"content": text},
+        "annotations": {"strikethrough": True},
     }
+
+
+def _plain_rt(text):
+    return {
+        "type": "text",
+        "plain_text": text,
+        "text": {"content": text},
+        "annotations": {},
+    }
+
+
+def _tagged(*parts, text="body"):
+    """A page: a paragraph of ``text`` plus one holding struck ``parts``."""
+    rich = []
+    for part in parts:
+        rich += [_struck(part), _plain_rt(" ")]
+    return [
+        _para(text),
+        {
+            "id": "t",
+            "type": "paragraph",
+            "has_children": False,
+            "paragraph": {"rich_text": rich},
+        },
+    ]
 
 
 def _edit(env, rid, props=None, db=DB1):
@@ -235,43 +218,100 @@ def _assert_noop(env, stats, count):
     assert env.result.changes is None
 
 
-def test_tags_are_added_cleaned_updated_and_removed(env):
-    env.notion.props[ROW] = _tags(["Big Idea", 'q"x', "a::b", "big  idea"])
+def _page(env, blocks, edit=True):
+    env.notion.tables[DB1]["rows"][ROW][2] = blocks
+    if edit:
+        env.notion.tables[DB1]["rows"][ROW][1] = EDITED
+
+
+def test_struck_text_becomes_cleaned_tags_and_leaves_the_card(env):
+    _page(
+        env,
+        _tagged("Big Idea", 'q"x', "a::b", "big  idea,second one"),
+        edit=False,
+    )
     env.sync()
     note = env.note(ROW)
     assert sorted(note.tags) == [
         "Notion::Big_Idea",
         "Notion::a::b",
         "Notion::qx",
+        "Notion::second_one",
     ]
+    assert "Big Idea" not in note.fields[1] and "<s>" not in note.fields[1]
+    assert "body" in note.fields[1]
+
+
+def test_tags_are_updated_removed_and_hand_added_ones_kept(env):
+    _page(env, _tagged("one"), edit=False)
+    env.sync()
+    note = env.note(ROW)
     note.tags.append("mine")
     env.col.update_note(note)
 
     env.notion.downloads.clear()
     env.col.add_custom_undo_entry("Previous action")
-    stats = env.sync()
-    _assert_noop(env, stats, 8)
+    _assert_noop(env, env.sync(), 8)
     assert env.col.undo_status().undo == "Previous action"
 
-    _edit(env, ROW, _tags(["Other"]))
+    _page(env, _tagged("Other"))
     assert env.sync()["updated"] == 1
     assert sorted(env.note(ROW).tags) == ["Notion::Other", "mine"]
 
-    _edit(env, ROW, _tags([]))
+    _page(env, [_para("body")])
+    env.notion.tables[DB1]["rows"][ROW][1] = "2026-01-03T00:00:00.000Z"
     assert env.sync()["updated"] == 1
     assert env.note(ROW).tags == ["mine"]
     env.notion.downloads.clear()
     _assert_noop(env, env.sync(), 8)
 
 
-def test_tags_changed_without_edit_time_need_no_download(env):
+def test_strikethrough_in_nested_blocks_lists_and_tables_is_a_tag(env):
+    item = {
+        "id": "li",
+        "type": "bulleted_list_item",
+        "has_children": False,
+        "bulleted_list_item": {
+            "rich_text": [_plain_rt("keep "), _struck("listtag")]
+        },
+    }
+    cell = {
+        "id": "row",
+        "type": "table_row",
+        "has_children": False,
+        "table_row": {"cells": [[_struck("celltag"), _plain_rt("cell")]]},
+    }
+    table = {
+        "id": "tb",
+        "type": "table",
+        "has_children": True,
+        "table": {"has_column_header": False, "has_row_header": False},
+    }
+    env.notion.children_of = {"tb": [cell]}
+    plain_children = env.notion.children
+    env.notion.children = lambda bid: (
+        env.notion.children_of[bid]
+        if bid in env.notion.children_of
+        else plain_children(bid)
+    )
+    _page(env, [item, table], edit=False)
     env.sync()
-    env.notion.props[ROW] = _tags(["late"])
-    env.notion.downloads.clear()
-    stats = env.sync()
-    assert stats["updated"] == 1 and env.notion.downloads == []
-    assert env.note(ROW).tags == ["Notion::late"]
-    _assert_noop(env, env.sync(), 8)
+    assert sorted(env.note(ROW).tags) == ["Notion::celltag", "Notion::listtag"]
+    back = env.note(ROW).fields[1]
+    assert "keep" in back and "cell" in back and "listtag" not in back
+
+
+def test_code_blocks_keep_their_struck_text(env):
+    code = {
+        "id": "c",
+        "type": "code",
+        "has_children": False,
+        "code": {"language": "python", "rich_text": [_struck("x = 1")]},
+    }
+    _page(env, [code], edit=False)
+    env.sync()
+    assert env.note(ROW).tags == []
+    assert "x" in env.note(ROW).fields[1]
 
 
 def test_hand_added_tags_survive_and_owned_tags_match_any_case(env):
@@ -285,25 +325,22 @@ def test_hand_added_tags_survive_and_owned_tags_match_any_case(env):
     _assert_noop(env, env.sync(), 8)
 
 
-def test_tagged_rows_in_the_listing_get_row_card_tags(env):
-    env.notion.props[ROW] = _tags(["x"])
+def test_tagged_rows_get_row_card_tags_and_unchanged_rows_none(env):
+    _page(env, _tagged("x"), edit=False)
     env.sync()
-    cards = {
-        row.source_id: row
-        for page in env.result.pages
-        for table in page.tables
-        for row in table.rows
-    }
-    assert cards[ROW].tags == ["Notion::x"]
-    assert cards[_rid(1)].tags == []
-    env.sync()  # unchanged rows carry their tags too
-    cards = {
-        row.source_id: row
-        for page in env.result.pages
-        for table in page.tables
-        for row in table.rows
-    }
-    assert cards[ROW].unchanged and cards[ROW].tags == ["Notion::x"]
+
+    def cards():
+        return {
+            row.source_id: row
+            for page in env.result.pages
+            for table in page.tables
+            for row in table.rows
+        }
+
+    assert cards()[ROW].tags == ["Notion::x"]
+    assert cards()[_rid(1)].tags == []
+    env.sync()
+    assert cards()[ROW].unchanged and env.note(ROW).tags == ["Notion::x"]
     assert TAG_PREFIX == "Notion::"
 
 
@@ -368,7 +405,7 @@ def test_stale_registry_id_falls_back_to_the_name_and_keeps_other_roles(env):
 
 
 def test_synced_notes_shape(env):
-    env.notion.props[ROW] = _tags(["x"])
+    _page(env, _tagged("x"), edit=False)
     env.sync()
     notes = env.sync_mod.synced_notes(env.col)
     assert len(notes) == 8

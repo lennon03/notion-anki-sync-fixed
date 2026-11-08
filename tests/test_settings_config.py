@@ -8,7 +8,7 @@ def test_settings_dialog_keeps_config_keys_it_does_not_show(qapp):
     cfg = {
         "notion_token": "t",
         "notion_pages": [P1],
-        "tags_column": "Labels",
+        "card_type_column": "Kind",
         "something_new": [1, 2],
     }
     dialog = SettingsDialog(
@@ -22,6 +22,6 @@ def test_settings_dialog_keeps_config_keys_it_does_not_show(qapp):
         out = dialog.config()
     finally:
         dialog.deleteLater()
-    assert out["tags_column"] == "Labels"
+    assert out["card_type_column"] == "Kind"
     assert out["something_new"] == [1, 2]
     assert out["notion_pages"] == [P1]

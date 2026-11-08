@@ -34,9 +34,7 @@
 <table>
   <tr><th>Column</th><th>Type</th><th>What it does</th></tr>
   <tr><td><code>Anki</code></td><td>Checkbox</td><td>Unticked rows don't get a card.</td></tr>
-  <tr><td><code>Tags</code></td><td>Multi-select, select, or text</td><td>Values become Anki tags.</td></tr>
   <tr><td><code>Card type</code></td><td>Select or text</td><td><code>Cloze</code>, <code>Overlapping</code> (with options, see below) or <code>Basic</code>.</td></tr>
-  <tr><td><code>Context</code></td><td>Relation, URL or text</td><td>Links a Notion page shown on the back.</td></tr>
 </table>
 <p>A table without a column simply behaves as before. Nothing is required.</p>
 
@@ -61,21 +59,22 @@
 <p>An option the add-on does not understand (for example <code>Overlapping 2</code>) gives a warning and the row is made as plain <code>Overlapping</code>. Changing the option in Notion updates the card.</p>
 <div class="note warn">The hiding of lines uses the CSS <code>:has()</code> rule. Test it on your phone; on an old AnkiDroid or WebView without <code>:has()</code>, hidden lines would be visible. Anki's multi-id clozes (<code>{{c1,2::...}}</code>) were tried instead, but they only turn a line into <code>[...]</code>, they cannot remove it, so the CSS stays.</div>
 
-<h2>Tags</h2>
-<p>Fill the <code>Tags</code> column. Spaces become underscores, quotes are dropped, and <code>::</code> makes a hierarchy. Every tag is put under <code>Notion::</code>, so <code>physics</code> becomes <code>Notion::physics</code>.</p>
+<h2>Tags (strikethrough)</h2>
+<p>In the row's page, <strong>strike through</strong> a word to make it a tag. The struck text is removed from the card and becomes an Anki tag. Separate several tags with commas, or strike each one separately. Spaces become underscores, quotes are dropped, and <code>::</code> makes a hierarchy. Every tag is put under <code>Notion::</code>, so <del>physics</del> becomes <code>Notion::physics</code>.</p>
 <ul>
   <li>Only <code>Notion::</code> tags are managed. Tags you add by hand in Anki are never removed.</li>
-  <li>Changing tags in Notion updates the cards without re-downloading the row.</li>
+  <li>Struck text inside code blocks and equations stays as it is.</li>
+  <li>There is no Tags column any more.</li>
 </ul>
 
 <h2>Choose which rows sync</h2>
 <p>Add an <code>Anki</code> checkbox column. Ticked rows (and every row in a table without the column) sync. Unticking a row that already has a card <strong>suspends</strong> it and tags it <code>notion-sync::unchecked</code>; it is not deleted. Tick it again to unsuspend. Cards you suspended yourself are never unsuspended.</p>
 
-<h2>Context column (adjacent note)</h2>
-<p>Put a relation to another page, or a Notion link, in <code>Context</code>. The linked page appears as a collapsed section at the end of the back. Other web links become a plain link.</p>
+<h2>Hint (adjacent note)</h2>
+<p>In the row's page, add a heading 4 called <code>#### Hint</code>. Everything under it becomes a collapsed <em>Hint</em> section at the end of the back. A divider (<code>---</code>) ends the hint; what follows the divider is back-of-card content again. Without a divider the hint runs to the end of the page.</p>
 <ul>
-  <li>The linked page is re-checked once a day, since editing it doesn't change the row.</li>
-  <li>A page the integration can't read shows as a link, with a warning.</li>
+  <li>The hint is part of the row, so there are no extra requests and no Context column any more.</li>
+  <li>For <code>Overlapping</code> cards the hint is not one of the lines.</li>
 </ul>
 
 <h2>Card styles</h2>

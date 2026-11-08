@@ -15,6 +15,7 @@ This module is standalone (no Anki imports) so it can be unit tested.
 
 from __future__ import annotations
 
+import copy
 import html
 import re
 from typing import Any, Dict, List, Optional
@@ -160,6 +161,66 @@ def _tint(hex_color: str) -> str:
     g = int(hex_color[3:5], 16)
     b = int(hex_color[5:7], 16)
     return f"rgba({r}, {g}, {b}, 0.2)"
+
+
+# --------------------------------------------------------------------- #
+# Tags: struck-through text
+# --------------------------------------------------------------------- #
+
+
+class StrikeTags:
+    """A block source whose struck-through text is taken out as tags.
+
+    Wraps anything with ``children(block_id)``. Every struck-through run of
+    text in the blocks it returns is removed from them and its words are
+    collected in ``tags`` (split at commas, not cleaned). Code and equation
+    blocks are left alone.
+    """
+
+    def __init__(self, tree: Any) -> None:
+        self._tree = tree
+        self.tags: List[str] = []
+
+    def children(self, block_id: str) -> List[dict]:
+        """Return the child blocks without their struck-through text."""
+        return [self._strip(b) for b in self._tree.children(block_id)]
+
+    def _strip(self, block: dict) -> dict:
+        btype = block.get("type")
+        body = block.get(btype) if isinstance(btype, str) else None
+        if not isinstance(body, dict) or btype in ("code", "equation"):
+            return block
+        block = copy.deepcopy(block)
+        body = block[btype]
+        if isinstance(body.get("rich_text"), list):
+            body["rich_text"] = self._clean(body["rich_text"])
+        if isinstance(body.get("cells"), list):  # table row
+            body["cells"] = [
+                self._clean(c) if isinstance(c, list) else c
+                for c in body["cells"]
+            ]
+        return block
+
+    def _clean(self, rts: List[dict]) -> List[dict]:
+        kept: List[dict] = []
+        run: List[str] = []
+        for rt in rts:
+            struck = (
+                rt.get("type", "text") == "text"
+                and (rt.get("annotations") or {}).get("strikethrough")
+            )
+            if struck:
+                run.append((rt.get("text") or {}).get("content", ""))
+                continue
+            self._flush(run)
+            kept.append(rt)
+        self._flush(run)
+        return kept
+
+    def _flush(self, run: List[str]) -> None:
+        if run:
+            self.tags += "".join(run).split(",")
+            run.clear()
 
 
 # --------------------------------------------------------------------- #

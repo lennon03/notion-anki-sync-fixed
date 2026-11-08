@@ -48,9 +48,13 @@ from typing import (
     Set,
     Tuple,
 )
-from urllib.parse import urlsplit
 
-from .htmlify import MediaCollector, render_blocks, render_lines
+from .htmlify import (
+    MediaCollector,
+    StrikeTags,
+    render_blocks,
+    render_lines,
+)
 from .notion_api import (
     BlockSource,
     BlockTree,
@@ -88,7 +92,7 @@ UNCHECKED_TAG = "notion-sync::unchecked"
 #   problems: what the last sync could not read, shown in the settings dialog
 # Bump RENDER_VERSION whenever the HTML produced for a row changes so every
 # row is re-rendered once (row origins and the page structure are kept).
-RENDER_VERSION = 4
+RENDER_VERSION = 5
 # Older versions kept the cache in the collection config under this key.
 LEGACY_STATE_KEY = "notionSync.rowState"
 # Notion's last_edited_time has minute precision; a row only counts as
@@ -105,11 +109,8 @@ AGE_SPREAD_SECONDS = 7 * 24 * 3600
 # Rows showing content that can change without bumping their last-edited
 # time (page mentions, synced block copies) are checked again this often.
 VOLATILE_MAX_AGE_SECONDS = 3600
-# Rows with a Context column: the linked page can change while the row's own
-# last-edited time stays put, so they are checked again this often.
-CONTEXT_MAX_AGE_SECONDS = 24 * 3600
 # RowState.volatile level -> how long the cached content is trusted
-VOLATILE_AGES = {1: VOLATILE_MAX_AGE_SECONDS, 2: CONTEXT_MAX_AGE_SECONDS}
+VOLATILE_AGES = {1: VOLATILE_MAX_AGE_SECONDS}
 # When part of Notion can't be read, notes whose row origin is unknown are
 # looked up one by one (GET /pages/<row>); at most this many per sync.
 MAX_ORIGIN_CHECKS = 25
@@ -142,7 +143,7 @@ class RowState:
     page_id: str = ""  # configured page and table the row was last seen in
     db_id: str = ""
     # content can change without bumping `edited`: 0 = no, 1 = checked
-    # hourly (mentions, synced copies), 2 = daily (a Context column)
+    # hourly (mentions, synced copies)
     volatile: int = 0
 
     def to_json(self) -> list:
@@ -168,7 +169,7 @@ class RowState:
                 str(value[2]),
                 str(value[3]),
                 str(value[4]),
-                max(0, min(2, int(value[5]))),  # older caches: false/true
+                max(0, min(1, int(value[5]))),  # older caches: false/true
             )
         except (TypeError, ValueError):
             return None
@@ -201,7 +202,7 @@ class RowCard:
     tags: List[str] = field(default_factory=list)  # Notion::... tags
     unchecked: bool = False  # sync checkbox off: no card, content not read
     columns: Optional["RowColumns"] = None  # the row's parsed properties
-    context_html: str = ""  # the Context column's pages, same placeholders
+    context_html: str = ""  # the page's "Hint" section, same placeholders
     # "basic", "cloze" or "overlapping" ("" = content not read)
     kind: str = ""
     lines: List[str] = field(default_factory=list)  # overlapping: its lines
@@ -248,9 +249,6 @@ class SyncResult:
         self.media_files: List[Tuple[str, str]] = []  # (abs path, fname)
         self.failed_media: Set[str] = set()
         self.warnings: List[str] = []
-        # context page id -> rendered html, and those showing live content
-        self.context_cache: Dict[str, str] = {}
-        self.context_live: Set[str] = set()
         # trusted row cache before this run / cache entries after it
         self.known: Dict[str, RowState] = {}
         self.fetched: Dict[str, RowState] = {}
@@ -420,9 +418,7 @@ def deck_safe(name: str) -> str:
 
 COLUMN_DEFAULTS = {
     "sync_column": "Anki",
-    "tags_column": "Tags",
     "card_type_column": "Card type",
-    "context_column": "Context",
 }
 
 
@@ -431,9 +427,7 @@ class RowColumns:
     """What a row's properties say, read by ``row_columns``."""
 
     sync: Optional[bool] = None  # None = the table has no sync column
-    tags: List[str] = field(default_factory=list)  # cleaned, not prefixed
     card_type: str = ""  # lowercased select name
-    context: List[str] = field(default_factory=list)  # page ids or URLs
     props: Dict[str, str] = field(default_factory=dict)  # name -> text
 
 
@@ -526,46 +520,6 @@ def clean_tags(values: Iterable[str]) -> List[str]:
     return list(out.values())
 
 
-def _tag_values(prop: dict) -> List[str]:
-    kind = prop.get("type")
-    value = _value(prop)
-    if kind == "multi_select":
-        return _names(value)
-    if kind in ("select", "status"):
-        return _names([value]) if isinstance(value, dict) else []
-    if kind == "rich_text":
-        return _plain(value).split(",")
-    return []
-
-
-def _context_values(prop: dict) -> List[str]:
-    kind = prop.get("type")
-    value = _value(prop)
-    out: List[str] = []
-    if kind == "relation" and isinstance(value, list):
-        out = [
-            _bare(str(r.get("id") or "")) for r in value if isinstance(r, dict)
-        ]
-    elif kind == "url" and value:
-        out = [str(value)]
-    elif kind == "rich_text" and isinstance(value, list):
-        for rt in value:
-            if not isinstance(rt, dict):
-                continue
-            mention = rt.get("mention") or {}
-            if mention.get("type") == "page":
-                out.append(
-                    _bare(str((mention.get("page") or {}).get("id") or ""))
-                )
-                continue
-            link = rt.get("href") or ((rt.get("text") or {}).get("link"))
-            if isinstance(link, dict):
-                link = link.get("url")
-            if link:
-                out.append(str(link))
-    return list(dict.fromkeys(v for v in out if v))
-
-
 def row_columns(row: dict, cfg: dict) -> RowColumns:
     """Read the special columns of a row listed by a data source query.
 
@@ -593,18 +547,12 @@ def row_columns(row: dict, cfg: dict) -> RowColumns:
             formula = sync.get("formula") or {}
             if formula.get("type") == "boolean":
                 out.sync = bool(formula.get("boolean"))
-    tags = _find_prop(props, name("tags_column"))
-    if tags is not None:
-        out.tags = clean_tags(_tag_values(tags))
     card_type = _find_prop(props, name("card_type_column"))
     if card_type is not None and card_type.get("type") in (
         "select",
         "status",
     ):
         out.card_type = _prop_text(card_type).strip().lower()
-    context = _find_prop(props, name("context_column"))
-    if context is not None:
-        out.context = _context_values(context)
     return out
 
 
@@ -655,8 +603,7 @@ def is_unchanged(
     """Tell whether the cached content is still what Notion has.
 
     A volatile row can change without its last_edited_time moving: with page
-    mentions or synced block copies it is only trusted for an hour, with a
-    Context column for a day.
+    mentions or synced block copies it is only trusted for an hour.
     """
     if cached is None:
         return False
@@ -1446,7 +1393,6 @@ def _fetch_table(
         row_id = row["id"].replace("-", "")
         edited = str(row.get("last_edited_time") or "")
         columns = row_columns(row, result.config)
-        tags = [TAG_PREFIX + t for t in columns.tags]
         if columns.sync is False:
             # unchecked: no card and no download. Only where the row came
             # from is kept; its content is read when it is checked again
@@ -1457,7 +1403,6 @@ def _fetch_table(
                     front=front,
                     back_html="",
                     url=row.get("url", ""),
-                    tags=tags,
                     unchecked=True,
                     columns=columns,
                 )
@@ -1476,7 +1421,6 @@ def _fetch_table(
                     back_html="",
                     url=row.get("url", ""),
                     unchanged=True,
-                    tags=tags,
                     columns=columns,
                 )
             )
@@ -1484,12 +1428,10 @@ def _fetch_table(
         result.progress(f"{title} {index}/{len(rows)}")
         fetched_at = time.time()
         recorder = _RecordingTree(tree)
+        struck = StrikeTags(recorder)
         try:
-            kind, back, lines, overlap = _render_row(
-                row["id"], front, columns.card_type, media, recorder, result
-            )
-            context = _render_context(
-                columns.context, client, tree, recorder, media, result
+            kind, back, context, lines, overlap = _render_row(
+                row["id"], front, columns.card_type, media, struck, result
             )
         except NotionError as e:
             # still listed in Notion: keep its note, retry next sync
@@ -1508,7 +1450,7 @@ def _fetch_table(
             "",
             page_id,
             db_id,
-            _volatile_level(recorder.volatile or live_title, columns),
+            1 if recorder.volatile or live_title else 0,
         )
         table.rows.append(
             RowCard(
@@ -1517,7 +1459,7 @@ def _fetch_table(
                 back_html=back,
                 context_html=context,
                 url=row.get("url", ""),
-                tags=tags,
+                tags=[TAG_PREFIX + t for t in clean_tags(struck.tags)],
                 columns=columns,
                 kind=kind,
                 lines=lines,
@@ -1525,91 +1467,6 @@ def _fetch_table(
             )
         )
     return table
-
-
-def _volatile_level(live: bool, columns: "RowColumns") -> int:
-    """RowState.volatile: hourly for live content, daily for a context."""
-    return 1 if live else (2 if columns.context else 0)
-
-
-def _context_id(entry: str) -> str:
-    """Return the Notion page id of a context entry ("" for other links)."""
-    if re.fullmatch(r"[0-9a-f]{32}", entry):
-        return entry
-    host = (urlsplit(entry).hostname or "").lower()
-    if host == "notion.so" or host.endswith((".notion.so", ".notion.site")):
-        try:
-            return canonical_page_id(entry)
-        except NotionError:
-            return ""
-    return ""
-
-
-def _context_page(
-    page_id: str,
-    client: NotionClient,
-    tree: BlockSource,
-    media: MediaCollector,
-    result: SyncResult,
-) -> Tuple[str, bool]:
-    """Render one context page once per sync: (html, shows live content).
-
-    A page Notion refuses (not shared) becomes a link and a warning; any
-    transient error is raised, so the row is retried.
-    """
-    if page_id in result.context_cache:
-        return result.context_cache[page_id], page_id in result.context_live
-    sub = _RecordingTree(tree)
-    try:
-        title = page_title(client.get_page(page_id)) or "Untitled"
-        body = render_blocks(sub.children(page_id), media, sub)
-        html = (
-            f'<details class="ns-context"><summary>Context: {escape(title)}'
-            f"</summary>{body}</details>"
-        )
-    except NotionError as e:
-        if getattr(e, "transient", False):
-            raise
-        html = (
-            '<p class="ns-context"><a href="https://www.notion.so/'
-            f'{page_id}">Context</a></p>'
-        )
-        result.warnings.append(
-            f"Context page {page_id[:8]}... could not be read "
-            f"({_reason(e)}): is it shared with the integration? "
-            "A link is shown instead"
-        )
-    result.context_cache[page_id] = html
-    if sub.volatile:
-        result.context_live.add(page_id)
-    return html, sub.volatile
-
-
-def _render_context(
-    entries: List[str],
-    client: NotionClient,
-    tree: BlockSource,
-    recorder: "_RecordingTree",
-    media: MediaCollector,
-    result: SyncResult,
-) -> str:
-    """Render a row's Context column; pages with live content make the row
-    hourly (via ``recorder``).
-    """
-    out: List[str] = []
-    for entry in entries:
-        page_id = _context_id(entry)
-        if page_id:
-            html, live = _context_page(page_id, client, tree, media, result)
-            recorder.volatile = recorder.volatile or live
-            out.append(html)
-        elif urlsplit(entry).scheme in ("http", "https"):
-            link = escape(entry, quote=True)
-            out.append(
-                f'<p class="ns-context"><a href="{link}">Context: '
-                f"{escape(entry)}</a></p>"
-            )
-    return "".join(out)
 
 
 # Anki's cloze syntax: {{c1::hidden text}}
@@ -1665,6 +1522,33 @@ def parse_overlap(card_type: str) -> Optional[OverlapSpec]:
     return OverlapSpec(before, after, group)
 
 
+HINT_HEADING = "hint"
+
+
+def split_hint(blocks: List[dict]) -> Tuple[List[dict], List[dict]]:
+    """Split a page into (card blocks, hint blocks).
+
+    A ``#### Hint`` heading starts the hint; it runs up to the next divider
+    (``---``), which is dropped, or to the end of the page. What comes
+    before the heading and after the divider stays on the card.
+    """
+    for start, block in enumerate(blocks):
+        if block.get("type") != "heading_4":
+            continue
+        text = _plain((block.get("heading_4") or {}).get("rich_text"))
+        if text.strip().lower() != HINT_HEADING:
+            continue
+        rest = blocks[start + 1 :]
+        end = next(
+            (i for i, b in enumerate(rest) if b.get("type") == "divider"),
+            None,
+        )
+        if end is None:
+            return blocks[:start], rest
+        return blocks[:start] + rest[end + 1 :], rest[:end]
+    return blocks, []
+
+
 def _render_row(
     row_id: str,
     title: str,
@@ -1672,13 +1556,21 @@ def _render_row(
     media: MediaCollector,
     tree: Any,
     result: SyncResult,
-) -> Tuple[str, str, List[str], Optional[OverlapSpec]]:
-    """Download and render a row: (kind, page HTML, lines of an overlapping
-    cloze, its options). The page is read once; the "Card type" column
-    decides the kind, otherwise a cloze marker in the title or page makes it
-    a cloze.
+) -> Tuple[str, str, str, List[str], Optional[OverlapSpec]]:
+    """Download and render a row: (kind, page HTML, hint HTML, lines of an
+    overlapping cloze, its options). The page is read once; the "Card type"
+    column decides the kind, otherwise a cloze marker in the title or page
+    makes it a cloze.
     """
-    blocks = tree.children(row_id)
+    blocks, hint_blocks = split_hint(tree.children(row_id))
+    hint = ""
+    if hint_blocks:
+        body = render_blocks(hint_blocks, media, tree)
+        if body:
+            hint = (
+                '<details class="ns-context"><summary>Hint</summary>'
+                f"{body}</details>"
+            )
     if card_type.split(None, 1)[:1] == ["overlapping"]:
         spec = parse_overlap(card_type)
         if spec is None:
@@ -1690,23 +1582,23 @@ def _render_row(
         lines = render_lines(blocks, media, tree)
         if lines:
             options = None if spec == OverlapSpec() else spec
-            return "overlapping", "\n".join(lines), lines, options
+            return "overlapping", "\n".join(lines), hint, lines, options
         result.warnings.append(
             f"Row '{title}': Card type is Overlapping but the page has no "
             "line; made a basic card"
         )
-        return "basic", "", [], None
+        return "basic", "", hint, [], None
     back = render_blocks(blocks, media, tree)
     if card_type == "basic":
-        return "basic", back, [], None
+        return "basic", back, hint, [], None
     if _CLOZE.search(title) or _CLOZE.search(back):
-        return "cloze", back, [], None
+        return "cloze", back, hint, [], None
     if card_type == "cloze":
         result.warnings.append(
             f"Row '{title}': Card type is Cloze but no {{{{c1::...}}}} "
             "was found; made a basic card"
         )
-    return "basic", back, [], None
+    return "basic", back, hint, [], None
 
 
 def _bare(notion_id: str) -> str:
@@ -2337,19 +2229,8 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                         and state is not None
                         and current == state.fingerprint
                     ):
-                        if owned_key(row.tags) != owned_key(
-                            entry.tags.split()
-                        ):
-                            # tags changed in Notion; the listing has them,
-                            # so no download is needed
-                            undo.begin()
-                            note = col.get_note(entry.nid)
-                            note.tags = _with_tags(note.tags, row.tags)
-                            col.update_note(note)
-                            stats["updated"] += bump
-                            state.fingerprint = _stored_fingerprint(note)
-                        else:
-                            stats["unchanged"] += bump
+                        # tags come from the page: nothing to compare
+                        stats["unchanged"] += bump
                     else:
                         _forget(result, row.source_id)
                     continue
