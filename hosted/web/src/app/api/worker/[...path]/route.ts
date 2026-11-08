@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 /** What the browser may reach on the worker, and with which method. */
 function allowed(method: string, parts: string[]): boolean {
   const path = parts.join("/");
-  if (method === "GET") return path === "status";
+  if (method === "GET") return path === "status" || path === "notion/pages";
   if (method === "POST") {
     return (
       path === "connect" ||

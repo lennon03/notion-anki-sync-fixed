@@ -44,9 +44,17 @@ export interface Backup {
   created_at: number;
 }
 
+export interface NotionPage {
+  id: string;
+  title: string;
+  parent: string;
+}
+
 export interface Status {
   ankiweb_connected: boolean;
   notion_connected: boolean;
+  notion_workspace: string | null;
+  notion_oauth_available: boolean;
   pages: Page[];
   schedule_minutes: number;
   next_run_at: number | null;
@@ -88,6 +96,7 @@ export const api = {
   connectNotion: (notion_token: string) =>
     request("/api/worker/connect", "POST", { notion_token }),
   disconnect: () => request("/api/worker/connect", "DELETE"),
+  notionPages: () => request<{ pages: NotionPage[] }>("/api/worker/notion/pages", "GET"),
   savePages: (pages: string[]) => request("/api/worker/config", "PUT", { pages }),
   saveSchedule: (schedule_minutes: number) =>
     request("/api/worker/config", "PUT", { schedule_minutes }),

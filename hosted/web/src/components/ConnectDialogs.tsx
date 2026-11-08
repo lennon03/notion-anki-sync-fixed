@@ -21,6 +21,7 @@ import { ApiFailure, api } from "~/lib/api";
 
 function ConnectDialog({
   connected,
+  label,
   title,
   description,
   canSubmit,
@@ -30,6 +31,7 @@ function ConnectDialog({
   children,
 }: {
   connected: boolean;
+  label?: string | undefined;
   title: string;
   description: string;
   canSubmit: boolean;
@@ -68,7 +70,7 @@ function ConnectDialog({
   return (
     <>
       <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-        {connected ? "Reconnect" : "Connect"}
+        {label ?? (connected ? "Reconnect" : "Connect")}
       </Button>
       <Dialog open={open} onOpenChange={change}>
         <DialogPopup className="sm:max-w-md">
@@ -150,9 +152,11 @@ export function ConnectAnkiWebDialog({
 
 export function ConnectNotionDialog({
   connected,
+  label,
   onDone,
 }: {
   connected: boolean;
+  label?: string;
   onDone: () => void;
 }) {
   const [token, setToken] = useState("");
@@ -160,6 +164,7 @@ export function ConnectNotionDialog({
   return (
     <ConnectDialog
       connected={connected}
+      label={label}
       title="Connect Notion"
       description="Paste the internal integration token. It's stored encrypted and never shown again."
       canSubmit={Boolean(token.trim())}

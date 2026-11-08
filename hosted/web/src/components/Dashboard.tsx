@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ConnectAnkiWebDialog, ConnectNotionDialog } from "~/components/ConnectDialogs";
+import { PagePicker } from "~/components/PagePicker";
 import { BackupsSection, HistorySection, LastRunRow, StatusBadge } from "~/components/RunViews";
 import { SettingsRow, SettingsSection } from "~/components/settings/settingsLayout";
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
@@ -26,7 +27,6 @@ import {
 } from "~/components/ui/select";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Spinner } from "~/components/ui/spinner";
-import { Textarea } from "~/components/ui/textarea";
 import { ApiFailure, type Status, api, formatTime } from "~/lib/api";
 import { type Theme, applyTheme, currentTheme } from "~/lib/theme";
 
@@ -55,69 +55,6 @@ function ConnectionBadge({ connected }: { connected: boolean }) {
     <Badge variant="success">Connected</Badge>
   ) : (
     <Badge variant="outline">Not connected</Badge>
-  );
-}
-
-function PagesRow({
-  status,
-  onSaved,
-  onError,
-}: {
-  status: Status;
-  onSaved: () => void;
-  onError: (text: string) => void;
-}) {
-  const saved = status.pages.map((page) => `https://www.notion.so/${page.id}`).join("\n");
-  const [text, setText] = useState(saved);
-  const [busy, setBusy] = useState(false);
-  const lastSaved = useRef(saved);
-
-  useEffect(() => {
-    // keep what the user is typing; take server changes otherwise
-    setText((current) => (current === lastSaved.current ? saved : current));
-    lastSaved.current = saved;
-  }, [saved]);
-
-  async function save() {
-    setBusy(true);
-    try {
-      await api.savePages(text.split("\n"));
-      onSaved();
-    } catch (failure) {
-      onError(message(failure, "Could not save the pages."));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const titles = status.pages.filter((page) => page.title).map((page) => page.title);
-  return (
-    <SettingsRow
-      title="Page links"
-      description="One Notion page link per line. Share each page with your integration first."
-      status={titles.length ? titles.join(", ") : undefined}
-      control={
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy || text === saved}
-          onClick={() => void save()}
-        >
-          {busy ? <Spinner /> : null}
-          Save
-        </Button>
-      }
-    >
-      <div className="pt-2 pb-3">
-        <Textarea
-          aria-label="Notion page links"
-          rows={4}
-          value={text}
-          placeholder="https://www.notion.so/My-Page-0123456789abcdef0123456789abcdef"
-          onChange={(event) => setText(event.target.value)}
-        />
-      </div>
-    </SettingsRow>
   );
 }
 
@@ -172,6 +109,7 @@ export function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [theme, setTheme] = useState<Theme>("light");
+  const [notionResult, setNotionResult] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const refresh = useCallback(async () => {
@@ -193,6 +131,8 @@ export function Dashboard() {
 
   useEffect(() => {
     setTheme(currentTheme());
+    setNotionResult(new URLSearchParams(window.location.search).get("notion"));
+    window.history.replaceState(null, "", "/");
     void refresh();
     return () => clearTimeout(timer.current);
   }, [refresh]);
@@ -271,6 +211,11 @@ export function Dashboard() {
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
+          {notionResult === "failed" ? (
+            <Alert variant="error">
+              <AlertDescription>Notion sign-in didn't complete. Try again.</AlertDescription>
+            </Alert>
+          ) : null}
 
           {status === null ? (
             <div className="flex flex-col gap-3">
@@ -323,14 +268,31 @@ export function Dashboard() {
                 />
                 <SettingsRow
                   title="Notion"
-                  description="Internal integration token, stored encrypted on the worker."
+                  description={
+                    status.notion_workspace
+                      ? `Signed in to ${status.notion_workspace}. The token is stored encrypted on the worker.`
+                      : "The token is stored encrypted on the worker."
+                  }
                   control={
                     <>
                       <ConnectionBadge connected={status.notion_connected} />
-                      <ConnectNotionDialog
-                        connected={status.notion_connected}
-                        onDone={() => void refresh()}
-                      />
+                      {status.notion_oauth_available ? (
+                        <>
+                          <ConnectNotionDialog
+                            connected={status.notion_connected}
+                            label="Use a token"
+                            onDone={() => void refresh()}
+                          />
+                          <Button size="sm" render={<a href="/api/notion/start" />}>
+                            {status.notion_connected ? "Reconnect" : "Connect with Notion"}
+                          </Button>
+                        </>
+                      ) : (
+                        <ConnectNotionDialog
+                          connected={status.notion_connected}
+                          onDone={() => void refresh()}
+                        />
+                      )}
                     </>
                   }
                 />
@@ -338,8 +300,9 @@ export function Dashboard() {
               </SettingsSection>
 
               <SettingsSection title="Notion pages">
-                <PagesRow
-                  status={status}
+                <PagePicker
+                  connected={status.notion_connected}
+                  saved={status.pages}
                   onSaved={() => void refresh()}
                   onError={setError}
                 />

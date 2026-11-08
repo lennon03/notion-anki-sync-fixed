@@ -31,7 +31,9 @@ export async function POST(request: Request) {
   response.cookies.set(SESSION_COOKIE, payload.token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "strict",
+    // Lax so the redirect back from Notion arrives signed in; every
+    // state-changing route also checks the Origin header
+    sameSite: "lax",
     path: "/",
     maxAge: SESSION_MAX_AGE,
   });
