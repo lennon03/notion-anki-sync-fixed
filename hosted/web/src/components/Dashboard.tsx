@@ -348,7 +348,7 @@ export function Dashboard() {
               <SettingsSection title="Schedule">
                 <SettingsRow
                   title="Sync automatically"
-                  description="The worker syncs in the background, whether or not Anki is open."
+                  description="Runs without Anki open. While the worker sleeps, a due sync waits until you next open this site."
                   control={
                     <Select
                       value={String(status.schedule_minutes)}

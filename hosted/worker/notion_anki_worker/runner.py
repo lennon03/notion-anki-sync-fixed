@@ -116,7 +116,11 @@ class Runner:
 
 
 class Scheduler:
-    """Starts a run whenever the configured interval has passed."""
+    """Starts a run whenever the configured interval has passed.
+
+    The loop lives in this process, so nothing fires while the host has it
+    asleep; an overdue run starts at the first tick after it wakes.
+    """
 
     def __init__(self, store: st.Store, runner: Runner) -> None:
         self._store = store
