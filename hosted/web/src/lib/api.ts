@@ -50,6 +50,17 @@ export interface NotionPage {
   parent: string;
 }
 
+export interface ExportTable {
+  id: string;
+  name: string;
+}
+
+export interface ExportPage {
+  id: string;
+  name: string;
+  tables: ExportTable[];
+}
+
 export interface Status {
   ankiweb_connected: boolean;
   notion_connected: boolean;
@@ -95,6 +106,8 @@ export const api = {
     request("/api/worker/connect", "POST", { ankiweb: { username, password } }),
   disconnect: () => request("/api/worker/connect", "DELETE"),
   notionPages: () => request<{ pages: NotionPage[] }>("/api/worker/notion/pages", "GET"),
+  exportPage: (id: string) =>
+    request<ExportPage>(`/api/worker/notion/export/page/${encodeURIComponent(id)}`, "GET"),
   savePages: (pages: string[]) => request("/api/worker/config", "PUT", { pages }),
   saveSchedule: (schedule_minutes: number) =>
     request("/api/worker/config", "PUT", { schedule_minutes }),

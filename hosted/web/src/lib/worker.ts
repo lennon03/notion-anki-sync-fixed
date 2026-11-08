@@ -20,7 +20,7 @@ export function workerUrl(): string {
 }
 
 /** The caller's address, as set by Vercel's edge. */
-async function clientIp(): Promise<string> {
+export async function clientIp(): Promise<string> {
   const all = await headers();
   return (
     all.get("x-real-ip") ??
@@ -32,7 +32,7 @@ async function clientIp(): Promise<string> {
 /** Calls the worker with the shared secret, which never reaches browsers. */
 export async function callWorker(
   path: string,
-  init: { method: string; body?: string; session?: string },
+  init: { method: string; body?: string; session?: string; ip?: string },
 ): Promise<Response> {
   const { url, secret } = workerConfig();
   return fetch(`${url}${path}`, {
@@ -42,7 +42,8 @@ export async function callWorker(
     headers: {
       Authorization: `Bearer ${secret}`,
       "Content-Type": "application/json",
-      "X-Client-IP": await clientIp(),
+      // A streamed response runs after the request is over: it passes `ip` in
+      "X-Client-IP": init.ip ?? (await clientIp()),
       ...(init.session ? { "X-Session-Token": init.session } : {}),
     },
   });
