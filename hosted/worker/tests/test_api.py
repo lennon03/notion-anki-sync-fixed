@@ -6,8 +6,8 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from notion_anki_worker import ankiweb, crypto, runner
-from notion_anki_worker.api import create_app
+from notion_anki_worker import ankiweb, crypto, notion_oauth, runner
+from notion_anki_worker.api import _list_notion_pages, create_app
 from notion_anki_worker.config import ConfigError, Settings
 from notion_anki_worker.pipeline import RunOutcome
 from notion_anki_worker.ratelimit import RateLimiter
@@ -21,6 +21,32 @@ HKEY = "host-key-do-not-leak"
 PASSWORD = "ankiweb-password-do-not-leak"
 SITE = {"Authorization": "Bearer shared-secret-for-tests"}
 PAGE = "a" * 32
+OAUTH_TOKEN = "oauth-access-token-do-not-leak"
+OAUTH_REFRESH = "oauth-refresh-token-do-not-leak"
+
+
+class FakeOAuth:
+    def __init__(self):
+        self.works = True
+        self.refreshes = 0
+        self.fail = False
+
+    def authorize_url(self, state):
+        return f"https://notion.example/consent?state={state}"
+
+    def exchange(self, code):
+        if self.fail:
+            raise notion_oauth.OAuthError()
+        assert code == "the-code"
+        return notion_oauth.Tokens(OAUTH_TOKEN, OAUTH_REFRESH, "My Space")
+
+    def refresh(self, token):
+        assert token == OAUTH_REFRESH
+        self.refreshes += 1
+        return notion_oauth.Tokens(OAUTH_TOKEN + "2", OAUTH_REFRESH + "2")
+
+    def token_works(self, _token):
+        return self.works
 
 
 class Harness:
@@ -29,6 +55,7 @@ class Harness:
         self.notion_error = None
         self.login_error = None
         self.outcome = RunOutcome(OK, "2 added", {"added": 2})
+        self.oauth = FakeOAuth()
         self.requests = []
         self.settings = settings
         self.app = create_app(
@@ -37,6 +64,10 @@ class Harness:
             check_notion=self._check,
             run_once=self._run,
             start_scheduler=False,
+            oauth=self.oauth,
+            list_pages=lambda token: [
+                {"id": PAGE, "title": "From Notion", "parent": ""}
+            ],
         )
         self.client = TestClient(self.app)
         token = self.client.post(
@@ -289,6 +320,18 @@ def test_sync_runs_and_reports_with_secrets_scrubbed(h):
     assert HKEY not in text and "[redacted]" in text
 
 
+def test_token_request_failure_says_nothing(monkeypatch):
+    def fail(*_a, **_k):
+        raise OSError("response with the-client-secret")
+
+    monkeypatch.setattr(notion_oauth.urllib.request, "urlopen", fail)
+    client = notion_oauth.NotionOAuth("id", "the-client-secret", "https://x")
+    with pytest.raises(notion_oauth.OAuthError) as caught:
+        client.exchange("code")
+    assert "the-client-secret" not in repr(caught.value)
+    assert "state=abc" in client.authorize_url("abc")
+
+
 def test_second_sync_is_refused_while_one_runs(h, monkeypatch):
     h.connect()
     h.add_page()
@@ -423,6 +466,128 @@ def test_settings_refuse_bad_key_and_hide_secrets():
         Settings.from_env(env)
     env["ENCRYPTION_KEY"] = base64.b64encode(bytes(32)).decode()
     assert "api-secret" not in repr(Settings.from_env(env))
+
+
+def _state(h):
+    url = h.client.post("/notion/oauth/start", headers=h.headers).json()["url"]
+    return url.split("state=")[1]
+
+
+def _finish(h, state):
+    return h.client.post(
+        "/notion/oauth/finish",
+        json={"code": "the-code", "state": state},
+        headers=h.headers,
+    )
+
+
+def test_notion_sign_in_stores_encrypted_and_never_echoes(h):
+    response = _finish(h, _state(h))
+    assert response.json() == {"ok": True}
+    status = h.status()
+    assert status["notion_connected"]
+    assert status["notion_oauth_available"]
+    assert status["notion_workspace"] == "My Space"
+    folder = h.settings.data_dir
+    raw = b"".join(p.read_bytes() for p in folder.iterdir() if p.is_file())
+    for leak in (OAUTH_TOKEN, OAUTH_REFRESH):
+        assert leak.encode() not in raw and leak not in str(status)
+
+
+def test_notion_sign_in_rejects_a_forged_state(h):
+    assert _finish(h, "forged.state").status_code == 400
+    assert not h.status()["notion_connected"]
+
+
+def test_notion_sign_in_needs_a_session(h):
+    response = h.client.post("/notion/oauth/start", headers=SITE)
+    assert response.status_code == 401
+
+
+def test_notion_refusal_is_reported_and_stores_nothing(h):
+    h.oauth.fail = True
+    response = _finish(h, _state(h))
+    assert response.json()["error"] == "notion_sign_in_failed"
+    assert not h.status()["notion_connected"]
+
+
+def test_expired_notion_sign_in_is_refreshed_before_a_run(h):
+    h.connect()
+    _finish(h, _state(h))
+    h.add_page()
+    h.oauth.works = False
+    h.sync()
+    assert h.oauth.refreshes == 1
+    assert h.requests[0].notion_token == OAUTH_TOKEN + "2"
+
+
+def test_working_notion_sign_in_is_not_refreshed(h):
+    h.connect()
+    _finish(h, _state(h))
+    h.add_page()
+    h.sync()
+    assert h.oauth.refreshes == 0
+
+
+def test_pasting_a_token_replaces_the_sign_in(h):
+    _finish(h, _state(h))
+    h.connect()
+    status = h.status()
+    assert status["notion_workspace"] is None
+
+
+def test_without_a_client_id_notion_sign_in_is_off(settings):
+    app = create_app(settings, start_scheduler=False)
+    assert notion_oauth.from_settings(settings) is None
+    assert app.state.runner._oauth is None
+
+
+def test_page_list_needs_notion_and_returns_pages(h):
+    first = h.client.get("/notion/pages", headers=h.headers)
+    assert first.status_code == 409
+    h.connect()
+    pages = h.client.get("/notion/pages", headers=h.headers).json()["pages"]
+    assert pages[0]["title"] == "From Notion"
+
+
+def test_page_list_leaves_out_table_rows(monkeypatch):
+    results = [
+        {"id": "b" * 32, "parent": {"type": "workspace"}, "properties": {}},
+        {"id": "c" * 32, "parent": {"type": "data_source_id"}},
+        {"id": "d" * 32, "parent": {"type": "page_id", "page_id": "b" * 32}},
+        {"id": "e" * 32, "parent": {"type": "workspace"}, "in_trash": True},
+    ]
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def _request(self, *_args):
+            return {"results": results, "has_more": False}
+
+    monkeypatch.setattr("notion_anki_worker.api.NotionClient", Client)
+    pages = _list_notion_pages("token")
+    assert [p["id"] for p in pages] == ["b" * 32, "d" * 32]
+    assert pages[1]["parent"] == "b" * 32
+
+
+def test_connecting_ankiweb_forgets_the_old_collection(h):
+    h.connect()
+    profile = h.settings.data_dir / "profile"
+    (profile / "collection.anki2").write_bytes(b"other account")
+    h.connect()
+    assert not (profile / "collection.anki2").exists()
+
+
+def test_connections_cant_change_during_a_run(h):
+    h.connect()
+    h.app.state.runner._busy.acquire()
+    try:
+        assert (
+            h.client.delete("/connect", headers=h.headers).status_code == 409
+        )
+    finally:
+        h.app.state.runner._busy.release()
 
 
 def test_blocking_statuses_cover_both_owner_actions():

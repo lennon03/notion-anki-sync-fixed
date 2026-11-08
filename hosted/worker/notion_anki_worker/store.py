@@ -17,6 +17,8 @@ log = logging.getLogger(__name__)
 
 KEY_HKEY = "ankiweb_hkey"
 KEY_NOTION = "notion_token"
+KEY_NOTION_REFRESH = "notion_refresh_token"
+KEY_NOTION_WORKSPACE = "notion_workspace"
 KEY_ENDPOINT = "ankiweb_endpoint"
 KEY_PAGES = "notion_pages"
 KEY_SCHEDULE = "schedule_minutes"
@@ -71,7 +73,7 @@ class Store:
         return db
 
     def _register_known_secrets(self) -> None:
-        for name in (KEY_HKEY, KEY_NOTION):
+        for name in (KEY_HKEY, KEY_NOTION, KEY_NOTION_REFRESH):
             try:
                 value = self.get_secret(name)
             except DecryptError:
@@ -129,7 +131,13 @@ class Store:
 
     def forget_credentials(self) -> None:
         """Delete the host key, its endpoint and the Notion token."""
-        self.delete(KEY_HKEY, KEY_ENDPOINT, KEY_NOTION)
+        self.delete(
+            KEY_HKEY,
+            KEY_ENDPOINT,
+            KEY_NOTION,
+            KEY_NOTION_REFRESH,
+            KEY_NOTION_WORKSPACE,
+        )
 
     # runs --------------------------------------------------------------
 

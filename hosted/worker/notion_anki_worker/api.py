@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from notion_anki_worker import ankiweb, crypto, pipeline
+from notion_anki_worker import ankiweb, crypto, notion_oauth, pipeline
 from notion_anki_worker import runner as rn
 from notion_anki_worker import store as st
 from notion_anki_worker.config import Settings
@@ -30,6 +30,10 @@ OWNER = "owner"
 SCHEDULES = (0, 15, 30, 60, 180, 360, 720, 1440)
 MAX_PAGES = 100
 LINK_SECONDS = 5 * 60
+OAUTH_STATE = "notion-oauth"
+OAUTH_STATE_SECONDS = 10 * 60
+SEARCH_PAGE_SIZE = 100
+SEARCH_MAX_REQUESTS = 20
 
 
 class ApiError(Exception):
@@ -71,6 +75,13 @@ class ConfigBody(_Body):
 
     pages: Optional[List[str]] = Field(default=None, max_length=MAX_PAGES)
     schedule_minutes: Optional[int] = None
+
+
+class OAuthFinishBody(_Body):
+    """``POST /notion/oauth/finish``: what Notion sent to the redirect."""
+
+    code: SecretStr = Field(min_length=1, max_length=2048)
+    state: str = Field(min_length=1, max_length=2048)
 
 
 class SyncBody(_Body):
@@ -120,6 +131,39 @@ def _check_notion_token(token: str) -> None:
     NotionClient(token)._request("GET", "/users/me")
 
 
+def _list_notion_pages(token: str) -> List[Dict[str, str]]:
+    """List the pages the token can read, without table rows."""
+    client = NotionClient(token)
+    pages: List[Dict[str, str]] = []
+    cursor = None
+    for _ in range(SEARCH_MAX_REQUESTS):
+        body: Dict[str, Any] = {
+            "filter": {"property": "object", "value": "page"},
+            "page_size": SEARCH_PAGE_SIZE,
+        }
+        if cursor:
+            body["start_cursor"] = cursor
+        found = client._request("POST", "/search", body)
+        for page in found.get("results") or []:
+            parent = page.get("parent") or {}
+            if parent.get("type") in ("database_id", "data_source_id"):
+                continue  # a table row, not a page
+            if page.get("in_trash") or page.get("archived"):
+                continue
+            pages.append(
+                {
+                    "id": canonical_page_id(page["id"]),
+                    "title": page_title(page) or "Untitled",
+                    "parent": (parent.get("page_id") or "").replace("-", ""),
+                }
+            )
+        cursor = found.get("next_cursor")
+        if not found.get("has_more") or not cursor:
+            break
+    pages.sort(key=lambda p: p["title"].casefold())
+    return pages
+
+
 def _validate_notion(token: str, check: Callable[[str], None]) -> None:
     try:
         check(token)
@@ -164,8 +208,11 @@ def create_app(
     check_notion: Callable[[str], None] = _check_notion_token,
     run_once: Callable[..., pipeline.RunOutcome] = pipeline.run_once,
     start_scheduler: bool = True,
+    oauth: Optional[notion_oauth.NotionOAuth] = None,
+    list_pages: Callable[[str], List[Dict[str, str]]] = _list_notion_pages,
 ) -> FastAPI:
     """Build the app."""
+    oauth = oauth or notion_oauth.from_settings(settings)
     register(settings.api_secret)
     vault = crypto.Vault(
         crypto.derive_key(settings.encryption_key, "vault-v1")
@@ -177,7 +224,7 @@ def create_app(
     paths = pipeline.Paths(settings.data_dir)
     pipeline.recover(paths)
     store.mark_interrupted()
-    runner = rn.Runner(store, paths, run_once)
+    runner = rn.Runner(store, paths, run_once, oauth)
     scheduler = rn.Scheduler(store, runner)
     session_limit = RateLimiter(per_ip=10, overall=40)
     connect_limit = RateLimiter(per_ip=5, overall=10)
@@ -192,6 +239,12 @@ def create_app(
     app.state.runner = runner
     app.state.scheduler = scheduler
     app.state.store = store
+
+    def require_idle() -> None:
+        if runner.running:
+            raise ApiError(
+                409, "already_running", "Wait for the current sync to finish."
+            )
 
     def site(authorization: str = Header(default="")) -> None:
         expected = f"Bearer {settings.api_secret}"
@@ -231,6 +284,8 @@ def create_app(
         return {
             "ankiweb_connected": store.has(st.KEY_HKEY),
             "notion_connected": store.has(st.KEY_NOTION),
+            "notion_workspace": store.get(st.KEY_NOTION_WORKSPACE),
+            "notion_oauth_available": oauth is not None,
             "pages": store.pages(),
             "schedule_minutes": store.schedule_minutes(),
             "next_run_at": scheduler.next_run_at(),
@@ -257,6 +312,7 @@ def create_app(
             register(notion)
             _validate_notion(notion, check_notion)
         if body.ankiweb is not None:
+            require_idle()
             if not connect_limit.allow(_client_ip(request)):
                 raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
             try:
@@ -275,6 +331,8 @@ def create_app(
                 raise ApiError(
                     502, "ankiweb_unavailable", "Could not reach AnkiWeb."
                 ) from None
+            # the local copy may belong to another account
+            pipeline.forget_collection(paths)
             store.put_secret(st.KEY_HKEY, result.hkey)
             if result.endpoint:
                 store.put(st.KEY_ENDPOINT, result.endpoint)
@@ -282,12 +340,67 @@ def create_app(
                 store.delete(st.KEY_ENDPOINT)
         if notion is not None:
             store.put_secret(st.KEY_NOTION, notion)
+            store.delete(st.KEY_NOTION_REFRESH, st.KEY_NOTION_WORKSPACE)
         return {"ok": True}
 
     @app.delete("/connect")
     def disconnect(_who: str = Depends(session)) -> Dict[str, bool]:
+        require_idle()
         store.forget_credentials()
+        pipeline.forget_collection(paths)
         return {"ok": True}
+
+    @app.post("/notion/oauth/start")
+    def oauth_start(_who: str = Depends(session)) -> Dict[str, str]:
+        if oauth is None:
+            raise ApiError(
+                404, "oauth_not_configured", "Notion sign-in isn't set up."
+            )
+        state = signer.issue(OAUTH_STATE, ttl=OAUTH_STATE_SECONDS)
+        return {"url": oauth.authorize_url(state)}
+
+    @app.post("/notion/oauth/finish")
+    def oauth_finish(
+        body: OAuthFinishBody, _who: str = Depends(session)
+    ) -> Dict[str, bool]:
+        if oauth is None:
+            raise ApiError(
+                404, "oauth_not_configured", "Notion sign-in isn't set up."
+            )
+        if signer.verify(body.state) != OAUTH_STATE:
+            raise ApiError(400, "bad_state", "This sign-in has expired.")
+        try:
+            tokens = oauth.exchange(body.code.get_secret_value())
+        except notion_oauth.OAuthError:
+            raise ApiError(
+                400, "notion_sign_in_failed", "Notion refused the sign-in."
+            ) from None
+        store.put_secret(st.KEY_NOTION, tokens.access)
+        if tokens.refresh:
+            store.put_secret(st.KEY_NOTION_REFRESH, tokens.refresh)
+        else:
+            store.delete(st.KEY_NOTION_REFRESH)
+        store.put(st.KEY_NOTION_WORKSPACE, tokens.workspace)
+        return {"ok": True}
+
+    @app.get("/notion/pages")
+    def notion_pages(_who: str = Depends(session)) -> Dict[str, Any]:
+        try:
+            token = store.get_secret(st.KEY_NOTION)
+        except crypto.DecryptError:
+            token = None
+        if not token:
+            raise ApiError(409, "not_connected", "Connect Notion first.")
+        try:
+            return {"pages": list_pages(token)}
+        except NotionError as e:
+            if e.status == 401:
+                raise ApiError(
+                    400, "notion_token_rejected", "Notion rejected this token."
+                ) from None
+            raise ApiError(
+                502, "notion_unavailable", "Could not reach Notion."
+            ) from None
 
     @app.put("/config")
     def config(

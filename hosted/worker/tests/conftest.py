@@ -28,6 +28,22 @@ from tests.test_htmlify_and_sync import (  # noqa: E402
 )
 
 
+class SearchingNotion(FakeNotion):
+    """Answers the "anything edited lately?" search too."""
+
+    def __init__(self):
+        super().__init__()
+        self.searches = 0
+
+    def _request(self, method, path, data=None):
+        assert (method, path) == ("POST", "/search")
+        self.searches += 1
+        edited = [p["edited"] for p in self.pages.values()]
+        for table in self.tables.values():
+            edited += [row[1] for row in table["rows"].values()]
+        return {"results": [{"last_edited_time": max(edited)}]}
+
+
 class FakeAnkiWeb:
     """Stands in for AnkiWeb, holding a real collection file."""
 
@@ -36,6 +52,9 @@ class FakeAnkiWeb:
         self.calls = []
         self.uploads = 0
         self.first_answer = SyncOutput.FULL_DOWNLOAD
+        self.pull_answer = SyncOutput.NO_CHANGES
+        self.synced_mod = None
+        self.downloads = 0
         self.push_answer = SyncOutput.NO_CHANGES
         self.error = None
         self.media_error = None
@@ -57,11 +76,14 @@ class FakeAnkiWeb:
             raise self.error
         if self._empty(col):
             required = self.first_answer
+        elif col.mod == self.synced_mod:  # nothing local: a pull
+            required = self.pull_answer
         else:  # the normal sync that sends the local changes
             required = self.push_answer
             if required == SyncOutput.NO_CHANGES:
                 col.db.execute("pragma wal_checkpoint(truncate)")
                 shutil.copyfile(col.path, self.path)
+                self.synced_mod = col.mod
         return SyncOutput(required=required, new_endpoint=self.new_endpoint)
 
     def full(self, col, *, auth, server_usn, upload):
@@ -77,6 +99,10 @@ class FakeAnkiWeb:
             media_folder_path=str(base.with_suffix(".media")),
             media_db_path=str(base.with_suffix(".media.db2")),
         )
+        self.downloads += 1
+        self.synced_mod = col._backend.db_query(
+            "select mod from col", [], False
+        )[0][0]
 
     def sync_media(self, col, auth):
         self.media_syncs += 1
@@ -121,7 +147,7 @@ def web(tmp_path, monkeypatch):
 @pytest.fixture
 def notion(monkeypatch):
     """Notion with one page, one table, two rows."""
-    fake = FakeNotion()
+    fake = SearchingNotion()
     fake.pages[P1] = {"edited": OLD, "title": "Hist", "tables": [DB1]}
     fake.tables[DB1] = {
         "title": "Defs",

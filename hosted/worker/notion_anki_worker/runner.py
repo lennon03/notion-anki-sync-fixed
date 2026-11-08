@@ -10,6 +10,7 @@ from typing import Callable, Optional
 from notion_anki_worker import pipeline
 from notion_anki_worker import store as st
 from notion_anki_worker.crypto import DecryptError
+from notion_anki_worker.notion_oauth import NotionOAuth, OAuthError
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +31,9 @@ class Runner:
         store: st.Store,
         paths: pipeline.Paths,
         run_once: Callable[..., pipeline.RunOutcome] = pipeline.run_once,
+        oauth: Optional[NotionOAuth] = None,
     ) -> None:
+        self._oauth = oauth
         self._store = store
         self._paths = paths
         self._run_once = run_once
@@ -90,9 +93,29 @@ class Runner:
         if thread is not None:
             thread.join(timeout)
 
+    def _current_notion_token(self, token: str) -> str:
+        """Refresh a Notion sign-in that has stopped working."""
+        store = self._store
+        refresh = store.get_secret(st.KEY_NOTION_REFRESH)
+        if self._oauth is None or not refresh:
+            return token
+        if self._oauth.token_works(token):
+            return token
+        try:
+            tokens = self._oauth.refresh(refresh)
+        except OAuthError:
+            log.warning("Refreshing the Notion sign-in failed")
+            return token
+        store.put_secret(st.KEY_NOTION, tokens.access)
+        store.put_secret(st.KEY_NOTION_REFRESH, tokens.refresh or refresh)
+        return tokens.access
+
     def _execute(self, run_id: int, request: pipeline.RunRequest) -> None:
         store = self._store
         try:
+            request.notion_token = self._current_notion_token(
+                request.notion_token
+            )
             outcome = self._run_once(
                 request,
                 self._paths,

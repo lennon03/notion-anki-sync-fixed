@@ -41,6 +41,10 @@ class Settings:
     encryption_key: bytes = field(repr=False)
     owner_password_hash: str = field(repr=False)
     port: int = 8000
+    # Sign in with Notion: optional, pasting a token keeps working without
+    notion_client_id: str = ""
+    notion_client_secret: str = field(default="", repr=False)
+    notion_redirect_uri: str = ""
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "Settings":
@@ -52,4 +56,7 @@ class Settings:
             encryption_key=_key(env),
             owner_password_hash=_required(env, "OWNER_PASSWORD_HASH"),
             port=int(env.get("PORT", "8000")),
+            notion_client_id=env.get("NOTION_CLIENT_ID", "").strip(),
+            notion_client_secret=env.get("NOTION_CLIENT_SECRET", "").strip(),
+            notion_redirect_uri=env.get("NOTION_REDIRECT_URI", "").strip(),
         )

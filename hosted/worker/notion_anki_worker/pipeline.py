@@ -1,4 +1,4 @@
-"""One sync: AnkiWeb -> scratch collection -> Notion -> AnkiWeb."""
+"""One sync: AnkiWeb -> local collection -> Notion -> AnkiWeb."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from anki.collection import Collection, SyncAuth
 from anki.errors import SyncError, SyncErrorKind
@@ -32,12 +32,19 @@ log = logging.getLogger(__name__)
 COLLECTION = "collection.anki2"
 MEDIA_FOLDER = "collection.media"
 MEDIA_DB = "collection.media.db2"
-MEDIA_PENDING = "pending"  # marker: the media store has unsent files
+MEDIA_PENDING = "pending"  # marker: the media folder has unsent files
+DIRTY = "dirty"  # marker: the local collection may differ from AnkiWeb
+RUN_STATE = "run-state.json"
 BACKUP_KEEP = 5
 BACKUP_NAME = re.compile(r"before-\d{8}-\d{6}-[0-9a-f]{6}\.colpkg")
 MEDIA_SYNC_TIMEOUT_SECONDS = 60 * 60
 MEDIA_POLL_SECONDS = 1.0
 PROGRESS_EVERY_SECONDS = 5.0
+# Notion's edit times are rounded to the minute
+NOTION_EDIT_MARGIN_SECONDS = 120
+# Some content changes without moving any edit time (see the add-on's
+# volatile rows), so Notion is read in full at least this often
+FULL_CHECK_SECONDS = addon_sync.VOLATILE_MAX_AGE_SECONDS
 
 Say = Callable[[str], None]
 
@@ -46,6 +53,7 @@ FULL_SYNC_MESSAGE = (
     "desktop and choose which side to keep, then run Sync now."
 )
 AUTH_MESSAGE = "AnkiWeb no longer accepts this login. Reconnect AnkiWeb."
+NOTHING = "Nothing to sync"
 
 
 class FullSyncNeeded(Exception):
@@ -60,13 +68,13 @@ class Paths:
 
     @property
     def scratch(self) -> Path:
-        """Parent of the per-run folders."""
+        """Parent of the per-run temporary folders."""
         return self.root / "scratch"
 
     @property
-    def media(self) -> Path:
-        """Media folder and its database between runs."""
-        return self.root / "media"
+    def profile(self) -> Path:
+        """The local collection and its media, kept between runs."""
+        return self.root / "profile"
 
     @property
     def backups(self) -> Path:
@@ -82,7 +90,7 @@ class Paths:
         """Create the folders."""
         for path in (
             self.scratch,
-            self.media,
+            self.profile,
             self.backups,
             self.cache.parent,
         ):
@@ -110,7 +118,36 @@ class RunOutcome:
     warnings: List[str] = field(default_factory=list)
     backup: Optional[str] = None
     endpoint: Optional[str] = None
-    media_pending: Optional[bool] = None
+    media_pending: Optional[bool] = None  # None: the run stopped before media
+
+
+class _Session:
+    """The open collection and the AnkiWeb login that goes with it."""
+
+    def __init__(self, request: RunRequest) -> None:
+        self.hkey = request.hkey
+        self.endpoint = request.endpoint
+        self.col: Optional[Collection] = None
+
+    @property
+    def auth(self) -> SyncAuth:
+        """The login to use for the next AnkiWeb call."""
+        return SyncAuth(hkey=self.hkey, endpoint=self.endpoint)
+
+    def moved_to(self, endpoint: str) -> None:
+        """Remember that AnkiWeb moved this account to another host."""
+        if endpoint:
+            self.endpoint = endpoint
+
+    def close(self) -> None:
+        """Close the collection, if open."""
+        col, self.col = self.col, None
+        if col is None or col.db is None:
+            return
+        try:
+            col.close()
+        except Exception:  # noqa: BLE001 - a dirty marker covers a bad close
+            log.warning("Closing the collection failed", exc_info=True)
 
 
 def addon_config(token: str, page_ids: List[str]) -> dict:
@@ -124,53 +161,56 @@ def addon_config(token: str, page_ids: List[str]) -> dict:
     return config
 
 
-def _move_media_in(paths: Paths, scratch: Path) -> None:
-    """Bring the media store into the run, never the database alone."""
-    folder, database = paths.media / MEDIA_FOLDER, paths.media / MEDIA_DB
-    if not folder.is_dir():
-        # A database without its files would report them deleted to AnkiWeb
-        database.unlink(missing_ok=True)
+def _migrate_legacy_media(paths: Paths) -> None:
+    """Move media from the folder older versions kept it in."""
+    legacy = paths.root / "media"
+    if not legacy.is_dir():
         return
-    os.replace(folder, scratch / MEDIA_FOLDER)
-    if database.is_file():
-        os.replace(database, scratch / MEDIA_DB)
-
-
-def move_media_out(paths: Paths, scratch: Path) -> None:
-    """Put a run's media back into the store, if the run has it.
-
-    The folder alone is fine: its files just count as new to Anki.
-    """
-    folder, database = scratch / MEDIA_FOLDER, scratch / MEDIA_DB
-    if folder.is_dir():
-        os.replace(folder, paths.media / MEDIA_FOLDER)
-        if database.is_file():
-            os.replace(database, paths.media / MEDIA_DB)
+    for name in (MEDIA_FOLDER, MEDIA_DB, MEDIA_PENDING):
+        source = legacy / name
+        if source.exists() and not (paths.profile / name).exists():
+            os.replace(source, paths.profile / name)
+    shutil.rmtree(legacy, ignore_errors=True)
 
 
 def recover(paths: Paths) -> None:
-    """After a crash: restore media, delete the leftover scratch folders."""
+    """At start-up: finish migrations, delete leftover temporary folders."""
     paths.ensure()
+    _migrate_legacy_media(paths)
     for scratch in paths.scratch.iterdir():
         if scratch.is_dir():
-            try:
-                move_media_out(paths, scratch)
-            except OSError:
-                log.exception("Could not restore media from a crashed run")
             shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _close(col: Optional[Collection]) -> None:
-    if col is None or col.db is None:
-        return
-    try:
-        col.close()
-    except Exception:  # noqa: BLE001 - the scratch folder is deleted anyway
-        log.warning("Closing the scratch collection failed", exc_info=True)
+def forget_collection(paths: Paths) -> None:
+    """Delete the local copy; used when the AnkiWeb account changes."""
+    shutil.rmtree(paths.profile, ignore_errors=True)
+    paths.cache.unlink(missing_ok=True)
+    paths.ensure()
+
+
+def _discard_collection(paths: Paths) -> None:
+    """Drop the local collection. AnkiWeb has everything that matters."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        (paths.profile / (COLLECTION + suffix)).unlink(missing_ok=True)
+    (paths.profile / RUN_STATE).unlink(missing_ok=True)
+    (paths.profile / DIRTY).unlink(missing_ok=True)
+
+
+def _open_collection(paths: Paths) -> tuple[Collection, bool]:
+    """Open the local collection; True if it existed and can be trusted."""
+    if not (paths.profile / MEDIA_FOLDER).is_dir():
+        # A database without its files would report them deleted to AnkiWeb
+        (paths.profile / MEDIA_DB).unlink(missing_ok=True)
+    if (paths.profile / DIRTY).exists():
+        _discard_collection(paths)
+    path = paths.profile / COLLECTION
+    existed = path.exists()
+    return Collection(str(path)), existed
 
 
 def _download(col: Collection, auth: SyncAuth) -> None:
-    """Replace the empty scratch collection with the AnkiWeb one."""
+    """Replace the local collection with the AnkiWeb one."""
     col.close_for_full_sync()
     try:
         # The only full transfer in the worker. The upload direction is
@@ -183,6 +223,110 @@ def _download(col: Collection, auth: SyncAuth) -> None:
             log.warning("Reopening after a failed download", exc_info=True)
         raise
     col.reopen(after_full_sync=True)
+
+
+def _bring_up_to_date(
+    session: _Session, existed: bool, paths: Paths, say: Say
+) -> None:
+    """Pull AnkiWeb's changes, downloading only when there is no other way."""
+    assert session.col is not None
+    say("Getting changes from AnkiWeb")
+    out = session.col.sync_collection(session.auth, sync_media=False)
+    session.moved_to(out.new_endpoint)
+    if existed and out.required == out.NO_CHANGES:
+        return
+    if existed and out.required != out.FULL_DOWNLOAD:
+        # AnkiWeb's copy was replaced, e.g. by a one-way sync from desktop.
+        # The local copy holds nothing of its own, so start again from it.
+        say("AnkiWeb's collection was replaced: getting it again")
+        session.close()
+        _discard_collection(paths)
+        session.col = Collection(str(paths.profile / COLLECTION))
+        out = session.col.sync_collection(session.auth, sync_media=False)
+        session.moved_to(out.new_endpoint)
+    if out.required != out.FULL_DOWNLOAD:
+        raise FullSyncNeeded()
+    say("Downloading the collection")
+    (paths.profile / DIRTY).touch()
+    _download(session.col, session.auth)
+    (paths.profile / DIRTY).unlink(missing_ok=True)
+
+
+def _notes_signature(col: Collection) -> List[int]:
+    """Change whenever a note is added, edited or deleted (not reviewed)."""
+    row = col.db.first("select count(), coalesce(max(mod), 0) from notes")
+    return [int(row[0]), int(row[1])]
+
+
+def _load_state(paths: Paths) -> Dict[str, Any]:
+    try:
+        state = json.loads(
+            (paths.profile / RUN_STATE).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _notion_is_quiet(token: str, since: float) -> bool:
+    """Say whether nothing visible to the token was edited since ``since``.
+
+    Notion's search can lag, which is safe: the time to compare with only
+    moves on after a run that read Notion for real, so a late edit is
+    still newer than it when it finally shows up.
+    """
+    try:
+        found = addon_sync.NotionClient(token)._request(
+            "POST",
+            "/search",
+            {
+                "sort": {
+                    "timestamp": "last_edited_time",
+                    "direction": "descending",
+                },
+                "page_size": 1,
+            },
+        )
+    except NotionError:
+        return False
+    results = found.get("results") or []
+    if not results:
+        return False
+    latest = addon_sync._parse_notion_time(
+        results[0].get("last_edited_time") or ""
+    )
+    return latest is not None and (latest < since - NOTION_EDIT_MARGIN_SECONDS)
+
+
+def _nothing_to_do(
+    request: RunRequest, state: Dict[str, Any], col: Collection
+) -> bool:
+    """Say whether this run can stop after asking Notion one question."""
+    if request.full or not state:
+        return False
+    if (
+        state.get("pages") != sorted(request.page_ids)
+        or state.get("render") != addon_sync.RENDER_VERSION
+        or state.get("notes") != _notes_signature(col)
+        or time.time() - float(state.get("full_at", 0)) >= FULL_CHECK_SECONDS
+    ):
+        return False
+    return _notion_is_quiet(
+        request.notion_token, float(state.get("watermark", 0))
+    )
+
+
+def _keep_unselected(result: Any, sources: Set[str]) -> None:
+    """Keep the cards of pages that aren't selected (any more).
+
+    The add-on deletes a synced note it didn't see. Here not seeing a note
+    can just mean its page was turned off, and deleting would lose its
+    review history. Only a row last seen in a selected page may go.
+    """
+    for source in sources:
+        origin = addon_sync._origin(source, result)
+        if origin is None or origin.page_id not in result.page_ids:
+            result.protected.add(source)
 
 
 def _backup(col: Collection, scratch: Path) -> Path:
@@ -239,6 +383,33 @@ def _sync_media(col: Collection, auth: SyncAuth) -> None:
         time.sleep(MEDIA_POLL_SECONDS)
 
 
+def _send_media(
+    session: _Session,
+    paths: Paths,
+    before: Set[str],
+    say: Say,
+    warnings: List[str],
+) -> bool:
+    """Send new media if there is any. True if some is still unsent."""
+    assert session.col is not None
+    marker = paths.profile / MEDIA_PENDING
+    if not marker.exists() and (
+        _media_names(paths.profile / MEDIA_FOLDER) == before
+    ):
+        return False
+    say("Syncing media")
+    try:
+        _sync_media(session.col, session.auth)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Media sync failed", exc_info=True)
+        warnings.append(
+            f"Media was not sent to AnkiWeb and will be retried: {e}"
+        )
+        return True
+    marker.unlink(missing_ok=True)
+    return False
+
+
 def _throttled(say: Say) -> Say:
     """Report row-by-row progress only every few seconds."""
     last = [0.0]
@@ -252,6 +423,23 @@ def _throttled(say: Say) -> Say:
     return report
 
 
+class _Laps:
+    """Measures each step, to show where a run spends its time."""
+
+    def __init__(self) -> None:
+        self.parts: List[str] = []
+        self._last = time.monotonic()
+
+    def mark(self, name: str) -> None:
+        """End the current step, calling it ``name``."""
+        now = time.monotonic()
+        self.parts.append(f"{name} {now - self._last:.1f}s")
+        self._last = now
+
+    def __str__(self) -> str:
+        return "Timings: " + ", ".join(self.parts)
+
+
 def _run(
     request: RunRequest,
     paths: Paths,
@@ -259,27 +447,34 @@ def _run(
     before: Set[str],
     say: Say,
 ) -> RunOutcome:
-    col: Optional[Collection] = None
+    session = _Session(request)
     result = None
-    endpoint = request.endpoint
+    laps = _Laps()
     try:
-        col = Collection(str(scratch / COLLECTION))
-        auth = SyncAuth(hkey=request.hkey, endpoint=endpoint)
+        session.col, existed = _open_collection(paths)
+        _bring_up_to_date(session, existed, paths, say)
+        laps.mark("AnkiWeb")
+        col = session.col
+        assert col is not None
 
-        say("Asking AnkiWeb for the collection")
-        out = col.sync_collection(auth, sync_media=False)
-        if out.new_endpoint:
-            endpoint = out.new_endpoint
-            auth = SyncAuth(hkey=request.hkey, endpoint=endpoint)
-        if out.required != out.FULL_DOWNLOAD:
-            raise FullSyncNeeded()
-        say("Downloading the collection")
-        _download(col, auth)
+        if _nothing_to_do(request, _load_state(paths), col):
+            laps.mark("check")
+            say("Nothing changed in Notion or in your notes")
+            warnings: List[str] = []
+            pending = _send_media(session, paths, before, say, warnings)
+            say(str(laps))
+            return RunOutcome(
+                status=WARNINGS if warnings else OK,
+                message=NOTHING,
+                warnings=warnings,
+                endpoint=session.endpoint,
+                media_pending=pending,
+            )
 
         staged_cache = scratch / "notion-cache.json"
         prepared = addon_sync.prepare_sync(col, str(paths.cache), request.full)
-
         say("Reading Notion")
+        read_at = time.time()
         result = addon_sync.fetch_pages(
             addon_config(request.notion_token, request.page_ids),
             prepared.known,
@@ -290,58 +485,66 @@ def _run(
             media_folder=prepared.media_folder,
         )
         result.cache_path = str(staged_cache)
+        _keep_unselected(result, prepared.sources)
+        laps.mark("Notion")
 
         backup_file = _backup(col, scratch)
         modified_before = col.mod
+        laps.mark("backup")
         say("Writing cards")
+        (paths.profile / DIRTY).touch()
         stats = addon_sync.apply_sync(col, result)
         changed = col.mod != modified_before
+        laps.mark("cards")
 
         backup_name = None
         if changed:
             say("Sending changes to AnkiWeb")
-            pushed = col.sync_collection(auth, sync_media=False)
-            if pushed.new_endpoint:
-                endpoint = pushed.new_endpoint
-                auth = SyncAuth(hkey=request.hkey, endpoint=endpoint)
+            pushed = col.sync_collection(session.auth, sync_media=False)
+            session.moved_to(pushed.new_endpoint)
             if pushed.required != pushed.NO_CHANGES:
                 raise FullSyncNeeded()
             backup_name = _store_backup(backup_file, paths)
+            laps.mark("push")
         else:
             say("Nothing changed: AnkiWeb left as it is")
+        (paths.profile / DIRTY).unlink(missing_ok=True)
         if staged_cache.exists():
             os.replace(staged_cache, paths.cache)
 
         warnings = list(result.warnings)
-        marker = paths.media / MEDIA_PENDING
-        media_pending = (
-            marker.exists() or _media_names(scratch / MEDIA_FOLDER) != before
-        )
-        if media_pending:
-            say("Syncing media")
-            try:
-                _sync_media(col, auth)
-                media_pending = False
-                marker.unlink(missing_ok=True)
-            except Exception as e:  # noqa: BLE001
-                log.warning("Media sync failed", exc_info=True)
-                warnings.append(
-                    f"Media was not sent to AnkiWeb and will be retried: {e}"
-                )
+        if not warnings and not result.incomplete:
+            (paths.profile / RUN_STATE).write_text(
+                json.dumps(
+                    {
+                        "watermark": read_at,
+                        "full_at": read_at,
+                        "pages": sorted(request.page_ids),
+                        "render": addon_sync.RENDER_VERSION,
+                        "notes": _notes_signature(col),
+                    }
+                ),
+                encoding="utf-8",
+            )
+        else:  # read everything again next time
+            (paths.profile / RUN_STATE).unlink(missing_ok=True)
 
+        pending = _send_media(session, paths, before, say, warnings)
+        laps.mark("media")
+        say(str(laps))
         return RunOutcome(
             status=WARNINGS if warnings else OK,
             message=_summary(stats, result.incomplete),
             stats=stats,
             warnings=warnings,
             backup=backup_name,
-            endpoint=endpoint,
-            media_pending=media_pending,
+            endpoint=session.endpoint,
+            media_pending=pending,
         )
     finally:
         if result is not None:
             result.cleanup()
-        _close(col)
+        session.close()
 
 
 def _summary(stats: Dict[str, int], incomplete: bool) -> str:
@@ -350,7 +553,7 @@ def _summary(stats: Dict[str, int], incomplete: bool) -> str:
         for key in ("added", "updated", "removed", "unchanged")
         if stats.get(key)
     ]
-    text = ", ".join(parts) or "Nothing to sync"
+    text = ", ".join(parts) or NOTHING
     if incomplete:
         text += " (cards of the parts that could not be read were kept)"
     return text
@@ -365,11 +568,10 @@ def run_once(request: RunRequest, paths: Paths, say: Say) -> RunOutcome:
     """Run one sync. Errors become an outcome; nothing is raised."""
     paths.ensure()
     scratch = Path(tempfile.mkdtemp(prefix="run-", dir=paths.scratch))
+    folder = paths.profile / MEDIA_FOLDER
+    before = _media_names(folder)
     outcome: Optional[RunOutcome] = None
-    before: Set[str] = set()
     try:
-        _move_media_in(paths, scratch)
-        before = _media_names(scratch / MEDIA_FOLDER)
         outcome = _run(request, paths, scratch, before, say)
         return outcome
     except FullSyncNeeded:
@@ -388,15 +590,8 @@ def run_once(request: RunRequest, paths: Paths, say: Say) -> RunOutcome:
     finally:
         # Files that arrived but weren't sent, whatever stopped the run: the
         # rows may be cached by then, so nothing else would send them later.
-        unsent = _media_names(scratch / MEDIA_FOLDER) != before
-        if unsent and (outcome is None or outcome.media_pending is not False):
-            (paths.media / MEDIA_PENDING).touch()
-        restored = True
-        try:
-            move_media_out(paths, scratch)
-        except OSError:
-            # keep the folder: start-up recovery restores it
-            log.exception("Could not move media back")
-            restored = False
-        if restored:
-            shutil.rmtree(scratch, ignore_errors=True)
+        if _media_names(folder) != before and (
+            outcome is None or outcome.media_pending is not False
+        ):
+            (paths.profile / MEDIA_PENDING).touch()
+        shutil.rmtree(scratch, ignore_errors=True)
