@@ -172,10 +172,25 @@ export function Dashboard() {
     <div className="flex h-svh flex-col bg-background text-foreground">
       <header className="flex h-(--workspace-topbar-height) shrink-0 items-center justify-between gap-3 border-b border-border px-4 sm:px-6">
         <div className="flex min-w-0 items-center gap-2">
-          <h1 className="truncate text-sm font-semibold">Notion Sync</h1>
+          <h1 className="truncate text-sm font-semibold">
+            <a
+              href="/about"
+              className="rounded-sm underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+            >
+              Notion Sync
+            </a>
+          </h1>
           {status?.latest ? <StatusBadge status={status.latest.status} running={running} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button
+            variant="ghost-muted"
+            size="sm"
+            className="max-sm:hidden"
+            render={<a href="/about" />}
+          >
+            About
+          </Button>
           <Button variant="ghost-muted" size="sm" render={<a href="/export" />}>
             Table Exporter
           </Button>

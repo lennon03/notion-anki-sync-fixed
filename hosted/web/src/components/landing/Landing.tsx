@@ -175,10 +175,15 @@ function Mark() {
   );
 }
 
-function SignIn({ size }: { size: "sm" | "xl" }) {
+interface AccountLink {
+  label: string;
+  href: string;
+}
+
+function AccountButton({ size, link }: { size: "sm" | "xl"; link: AccountLink }) {
   return (
-    <Button size={size} render={<a href="/login" />}>
-      Sign in
+    <Button size={size} render={<a href={link.href} />}>
+      {link.label}
     </Button>
   );
 }
@@ -272,7 +277,10 @@ function ExportSample() {
 }
 
 /** The public home page. Static: no session, no API call, nothing of the owner's. */
-export function Landing() {
+export function Landing({ signedIn = false }: { signedIn?: boolean }) {
+  const account: AccountLink = signedIn
+    ? { label: "Dashboard", href: "/" }
+    : { label: "Sign in", href: "/login" };
   return (
     <div className="flex min-h-svh flex-col overflow-x-clip bg-background text-foreground">
       <a
@@ -303,7 +311,7 @@ export function Landing() {
             <Button variant="ghost-muted" size="sm" render={<a href={REPO_URL} />}>
               GitHub
             </Button>
-            <SignIn size="sm" />
+            <AccountButton size="sm" link={account} />
           </div>
         </nav>
       </header>
@@ -351,7 +359,7 @@ export function Landing() {
               it as an Anki add-on, or hosted, so AnkiWeb stays current with Anki closed.
             </p>
             <div className={cn(styles.rise, "mb-4 flex flex-wrap justify-center gap-2.5")} style={rise(180)}>
-              <SignIn size="xl" />
+              <AccountButton size="xl" link={account} />
               <Button variant="outline" size="xl" render={<a href={REPO_URL} />}>
                 View on GitHub
                 <ArrowUpRight aria-hidden />
@@ -465,7 +473,7 @@ export function Landing() {
               One owner per site, and the code is yours to fork under the GPL.
             </p>
             <div className="flex flex-wrap justify-center gap-2.5">
-              <SignIn size="xl" />
+              <AccountButton size="xl" link={account} />
               <Button variant="outline" size="xl" render={<a href={`${REPO_URL}/fork`} />}>
                 Fork on GitHub
                 <ArrowUpRight aria-hidden />
@@ -486,7 +494,7 @@ export function Landing() {
               ["GitHub", REPO_URL],
               ["Hosted sync docs", HOSTED_DOCS_URL],
               ["Add-on docs", ADDON_DOCS_URL],
-              ["Sign in", "/login"],
+              [account.label, account.href],
             ].map(([label, href]) => (
               <li key={label}>
                 <InlineButton tone="muted" className="font-normal" render={<a href={href} />}>
