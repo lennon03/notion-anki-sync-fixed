@@ -176,6 +176,9 @@ export function Dashboard() {
           {status?.latest ? <StatusBadge status={status.latest.status} running={running} /> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <Button variant="ghost-muted" size="sm" render={<a href="/export" />}>
+            Table Exporter
+          </Button>
           <Button variant="ghost-muted" size="sm" onClick={() => void signOut()}>
             Sign out
           </Button>

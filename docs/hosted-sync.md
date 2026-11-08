@@ -100,10 +100,59 @@ and the download also need `X-Session-Token`.
 | `DELETE /connect` | forget the host key and the token |
 | `POST /notion/oauth/start`, `/finish` | Sign in with Notion; the state is signed by the worker |
 | `GET /notion/pages` | pages the token can read, without table rows |
+| `GET /notion/export/page/{id}` | what an id is (page or table) and the tables on it |
+| `GET /notion/export/table/{id}/rows` | a table's rows: id and title |
+| `GET /notion/export/blocks/{id}` | a row's blocks with their children nested, for the exporter |
 | `PUT /config` | page links, schedule |
 | `POST /sync` | start a run (409 if one is running) |
 | `POST /backups/{name}/link` | short-lived signed download path |
 | `GET /backups/{name}/download` | the `.colpkg`, with `exp` and `sig` |
+
+## Table exporter
+
+The site also exports a Notion page's tables to PDF, Word or HTML (it came from
+the separate `notion-philo-workflow` project). It lives at `/export` on the same
+site and uses the Notion sign-in above: there is no token field and no token in
+any environment variable.
+
+```
+browser --> /export, /api/export, /export/view (Vercel: renders)
+                |-- GET /notion/export/... --> worker (holds the token) --> Notion
+```
+
+**Why the work is split this way.** The three `/notion/export/*` routes on the
+worker only read: they look up a page's tables, a table's rows and a row's
+blocks (children nested, up to 5000 blocks per row), and return Notion's JSON.
+Rendering stays on the site. It needs KaTeX, highlight.js, `docx` and headless
+Chromium, none of which have a Python equivalent that would render the same
+documents, and Chromium would make the Railway image far heavier. What crosses
+from the worker to the site is page *content*, for one request, never stored;
+the token itself never leaves Railway. Every read passes the same secret and
+session as the other routes, and Notion's own error text is replaced by fixed
+messages, because it can quote the request.
+
+- `POST /api/export` (PDF, Word) and `GET /export/view` (HTML, drawn live) check
+  the session cookie first and the worker checks it again. `/api/export` also
+  checks `Origin`. Table ids are validated before any worker call, and at most
+  12 tables go in one export.
+- `/export/view` is a page of Notion content, so it has its own
+  Content-Security-Policy: no scripts at all, images from `https:` only,
+  fonts as data URIs. Even if an escape were ever missed, nothing in it can run.
+- KaTeX's stylesheet and the code font are inlined into
+  `src/lib/export/assets.generated.ts` by `scripts/inline-export-assets.mjs`
+  before every build (it is not committed), so exported documents are one
+  self-contained file and no font file has to be found at run time.
+
+**Embedding in Notion.** Notion shows embeds in a sandboxed iframe that blocks
+downloads, and the session cookie (`HttpOnly`, `SameSite=Lax`) is not sent
+inside a third-party frame anyway. So `/embed?id=<page id>` is only a launcher:
+a card with one link that opens `/export?id=...` in a new tab, where the owner's
+session applies (or the sign-in page does). The launcher reads no cookie, calls
+no API and shows nothing from Notion. It is the only page the site lets another
+origin frame: its `frame-ancestors` names `https://www.notion.so`,
+`https://notion.so` and `https://*.notion.site`, and it has no `X-Frame-Options`
+(which can't name an origin). Every other page keeps `frame-ancestors 'none'`.
+An old `?token=` on an embed link is ignored.
 
 ## Security
 
