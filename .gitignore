@@ -141,3 +141,5 @@ node_modules/
 .railway/
 # hosted/web/src/lib is source code, not a Python build folder
 !hosted/web/src/lib/
+hosted/web/next-env.d.ts
+*.tsbuildinfo

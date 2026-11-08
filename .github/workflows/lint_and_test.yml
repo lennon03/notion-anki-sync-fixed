@@ -72,3 +72,24 @@ jobs:
         working-directory: hosted/worker
         run: |
           pytest tests
+
+  site:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install dependencies
+        working-directory: hosted/web
+        run: npm ci
+      - name: Typecheck and build
+        working-directory: hosted/web
+        env:
+          WORKER_URL: http://127.0.0.1:8000
+          WORKER_API_SECRET: not-a-real-secret
+        run: |
+          npm run build
+          npm run typecheck
