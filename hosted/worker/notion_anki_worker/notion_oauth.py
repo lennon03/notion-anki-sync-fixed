@@ -106,7 +106,7 @@ class NotionOAuth:
     def token_works(self, token: str) -> bool:
         """Say False only when Notion itself rejects the token."""
         try:
-            NotionClient(token)._request("GET", "/users/me")
+            NotionClient(token).me()
         except NotionError as e:
             return e.status != 401
         return True

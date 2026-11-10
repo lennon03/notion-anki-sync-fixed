@@ -147,7 +147,7 @@ def _list_notion_pages(token: str) -> List[Dict[str, str]]:
         }
         if cursor:
             body["start_cursor"] = cursor
-        found = client._request("POST", "/search", body)
+        found = client.search(body)
         for page in found.get("results") or []:
             parent = page.get("parent") or {}
             if parent.get("type") in ("database_id", "data_source_id"):

@@ -643,7 +643,7 @@ def test_page_list_leaves_out_table_rows(monkeypatch):
         def __init__(self, _token):
             pass
 
-        def _request(self, *_args):
+        def search(self, _body):
             return {"results": results, "has_more": False}
 
     monkeypatch.setattr("notion_anki_worker.api.NotionClient", Client)

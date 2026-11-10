@@ -460,10 +460,6 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
             f'<p><a href="{_notion_url(block.get("id", ""))}">'
             f'{_esc(body.get("title") or "child page")}</a></p>'
         )
-    if btype == "child_database":
-        href = _attr(block.get("url", ""))
-        name = _esc(body.get("title") or "table")
-        return f'<p><a href="{href}">→ {name}</a></p>'
     if btype == "table":
         return _render_table(block, media, tree)
     return children_html

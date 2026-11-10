@@ -102,8 +102,6 @@ class NotionClient:
     def _request(
         self, method: str, path: str, data: Optional[dict] = None
     ) -> dict:
-        if path.startswith(BASE_URL):
-            path = path[len(BASE_URL) :]
         url = "/v1" + path
         body = json.dumps(data).encode("utf-8") if data is not None else None
         attempt = 0
@@ -154,9 +152,6 @@ class NotionClient:
                 status,
             )
 
-    def _iterate(self, results: List[dict], has_more: bool) -> List[dict]:
-        return list(results)
-
     # ------------------------------------------------------------------ #
     # Read endpoints
     # ------------------------------------------------------------------ #
@@ -167,19 +162,17 @@ class NotionClient:
 
     def get_block_children(self, block_id: str) -> List[dict]:
         """All children blocks of a page or block, following pagination."""
-        url = f"{BASE_URL}/blocks/{block_id}/children?page_size=100"
+        path = f"/blocks/{block_id}/children?page_size=100"
         out: List[dict] = []
+        cursor = ""
         while True:
-            data = self._request("GET", url)
-            out += data.get("results", [])
-            if not data.get("has_more"):
-                return out
-            cursor = data.get("next_cursor")
-            assert isinstance(cursor, str)
-            url = (
-                f"{BASE_URL}/blocks/{block_id}/children"
-                f"?page_size=100&start_cursor={cursor}"
+            data = self._request(
+                "GET", path + (f"&start_cursor={cursor}" if cursor else "")
             )
+            out += data.get("results", [])
+            cursor = data.get("next_cursor") or ""
+            if not data.get("has_more") or not cursor:
+                return out
 
     def get_database(self, database_id: str) -> dict:
         """GET /databases/<id>: title and data sources of a database."""
@@ -210,6 +203,14 @@ class NotionClient:
             data = self._request("POST", path, payload)
             out += data.get("results", [])
         return out
+
+    def search(self, body: dict) -> dict:
+        """POST /search: one page of what the token can read."""
+        return self._request("POST", "/search", body)
+
+    def me(self) -> dict:
+        """GET /users/me: the integration's own user."""
+        return self._request("GET", "/users/me")
 
     def download_file(self, url: str) -> bytes:
         """Download a Notion-hosted (or external) file. No auth needed."""
@@ -244,14 +245,26 @@ def retry_delay(retry_after: Optional[str], default: float) -> float:
     return max(0.0, when.timestamp() - time.time())
 
 
+def plain_text(rich: Any) -> str:
+    """Join Notion rich text into plain text ("" if it isn't a list)."""
+    if not isinstance(rich, list):
+        return ""
+    return "".join(
+        str(x.get("plain_text") or "") for x in rich if isinstance(x, dict)
+    )
+
+
+def title_rich_text(obj: dict) -> List[dict]:
+    """Return the rich text of a page's (or row's) title property."""
+    for prop in (obj.get("properties") or {}).values():
+        if isinstance(prop, dict) and prop.get("type") == "title":
+            return prop.get("title") or []
+    return []
+
+
 def page_title(obj: dict) -> str:
     """Extract the plain-text title from a page object."""
-    for prop in obj.get("properties", {}).values():
-        if prop.get("type") == "title":
-            return "".join(
-                x.get("plain_text", "") for x in prop.get("title", [])
-            ).strip()
-    return ""
+    return plain_text(title_rich_text(obj)).strip()
 
 
 class BlockSource(Protocol):

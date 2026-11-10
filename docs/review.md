@@ -29,7 +29,7 @@ in a common case, **low** = edge case or robustness.
   `a < b` loses text. Cards from normal pages escape theirs.
 - [x] **C4 (low) A table whose header row is its only row ends with a
   stray `</tbody>`.**
-- [ ] **C5 (medium) `canonical_page_id` keeps an id's capital letters.** The
+- [x] **C5 (medium) `canonical_page_id` keeps an id's capital letters.** The
   same page pasted once in capitals and once in lowercase is read twice and
   cached under two keys. Its last fallback ("the last 32 hex characters of the
   whole string") turns arbitrary text into an id, which then fails as a Notion
@@ -46,7 +46,7 @@ in a common case, **low** = edge case or robustness.
   `download_file` returns `resp.read()`; a large video can exhaust the worker's
   memory. The file is also written outside the `try`, so a full disk aborts
   the whole sync instead of failing one file.
-- [ ] **C9 (low) `get_block_children` uses `assert` for a missing cursor.**
+- [x] **C9 (low) `get_block_children` uses `assert` for a missing cursor.**
   An `AssertionError` escapes every `except NotionError` and fails the sync.
 - [ ] **C10 (low) A 2xx answer that is not JSON is marked transient but not
   retried.**
@@ -74,7 +74,7 @@ in a common case, **low** = edge case or robustness.
 
 ## Simplifications
 
-- [ ] **S1 Dead code.** `NotionClient._iterate`; the `child_database` branch
+- [x] **S1 Dead code.** `NotionClient._iterate`; the `child_database` branch
   of `_render_block` (the type is filtered out before); `_sniff_ext(...) or
   ".bin"`; the slug loop in `canonical_page_id`; `_reason()` (every
   `NotionError` has `reason`); the `bare_id` alias.
@@ -82,11 +82,14 @@ in a common case, **low** = edge case or robustness.
   (`page_title`, a loop in `_fetch_table`, `_resolve_table`,
   `export_read.describe`) and rich text is joined to plain text in three
   (`sync._plain`, `htmlify._plain`, `pagecards.rt_text`).
-- [ ] **S3 The worker calls the client's private `_request` for `/search` and
+  *Partly done:* titles go through `title_rich_text`/`plain_text` in
+  `notion_api.py`; `htmlify._plain` and `pagecards.rt_text` remain (they read
+  `text.content`, not `plain_text`).
+- [x] **S3 The worker calls the client's private `_request` for `/search` and
   `/users/me`** in three places. Two public methods remove that.
 - [ ] **S4 `_apply_card_style` and `_apply_note_types` in `__init__.py` are
   the same forty lines twice.**
-- [ ] **S5 The cloze and Source regular expressions exist twice** (`sync.py`,
+- [x] **S5 The cloze and Source regular expressions exist twice** (`sync.py`,
   `pagecards.py`).
 - [ ] **S6 `_get_or_create_model` and `_get_or_create_cloze_model` differ by
   a field list and a template.**

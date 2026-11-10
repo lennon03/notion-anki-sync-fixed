@@ -304,7 +304,7 @@ def test_notion_search_failure_falls_back_to_reading(
     def down(*_a, **_k):
         raise NotionError("down", 503, transient=True)
 
-    monkeypatch.setattr(notion, "_request", down)
+    monkeypatch.setattr(notion, "search", down)
     outcome = run_once(request_, paths, _say)
     assert outcome.status == OK and notion.calls
 

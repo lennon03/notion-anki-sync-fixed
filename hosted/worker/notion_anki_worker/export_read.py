@@ -17,6 +17,7 @@ from notion_sync_addon.notion_api import (
     NotionError,
     data_source_of,
     page_title,
+    plain_text,
 )
 
 # Notion allows about three requests a second; the client retries on 429, so
@@ -108,9 +109,7 @@ def describe(client: NotionClient, raw_id: str) -> Dict[str, Any]:
             database = client.get_database(ident)
             source = data_source_of(database)
             if source.get("id"):
-                title = "".join(
-                    t.get("plain_text", "") for t in database.get("title", [])
-                )
+                title = plain_text(database.get("title"))
                 name = title or "Notion table"
                 return {
                     "id": ident,

@@ -35,8 +35,7 @@ class SearchingNotion(FakeNotion):
         super().__init__()
         self.searches = 0
 
-    def _request(self, method, path, data=None):
-        assert (method, path) == ("POST", "/search")
+    def search(self, _body):
         self.searches += 1
         edited = [p["edited"] for p in self.pages.values()]
         for table in self.tables.values():

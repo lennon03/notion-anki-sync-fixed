@@ -62,7 +62,10 @@ from .notion_api import (
     NotionError,
     data_source_of,
     page_title,
+    plain_text,
+    title_rich_text,
 )
+from .pagecards import SOURCE as SOURCE_ID  # a Notion id: 32 hex digits
 from .pagecards import PageCard, has_cloze, parse_page, rt_text
 
 MODEL_NAME = "Notion Sync Card"
@@ -118,9 +121,8 @@ MAX_ORIGIN_CHECKS = 25
 # A row that was asked about is asked again after this long, so rows that
 # keep failing don't starve the ones not yet asked.
 ORIGIN_RECHECK_SECONDS = 24 * 3600
-# The Source of a synced note: a Notion row id, 32 lowercase hex digits.
-# Notes of the add-on's note type with any other Source were made by hand.
-SOURCE_ID = re.compile(r"[0-9a-f]{32}")
+# The Source of a synced note is a Notion row id (SOURCE_ID). Notes of the
+# add-on's note type with any other Source were made by hand.
 
 Progress = Callable[[str], None]
 
@@ -383,25 +385,14 @@ def canonical_page_id(raw: str) -> str:
     raw = raw.strip()
     bare = raw.replace("-", "")
     if re.fullmatch(r"[0-9a-fA-F]{32}", bare):
-        return bare
+        return bare.lower()
+    # a link: the id follows the title words (.../Philo-Histoire-<32hex>)
     match = re.search(
         r"(?i)([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{32})",
         raw,
     )
     if match:
         return match.group(1).replace("-", "").lower()
-    # URL: take the slug after the last /, then the id is the trailing
-    # 32-hex segment after the title words (e.g. .../p/Philo-Histoire-<32hex>).
-    slug = raw.rstrip("/").split("/")[-1].split("?")[0]
-    parts = slug.split("-")
-    for take in range(1, min(4, len(parts)) + 1):
-        candidate = "".join(parts[-take:]).replace("-", "")
-        if re.fullmatch(r"[0-9a-fA-F]{32}", candidate):
-            return candidate
-    # fallback: last 32 hex characters of the whole string
-    hex_only = re.sub(r"[^0-9a-fA-F]", "", raw)
-    if len(hex_only) >= 32:
-        return hex_only[-32:]
     raise NotionError(f"Cannot parse page id: {raw}")
 
 
@@ -430,14 +421,6 @@ class RowColumns:
     sync: Optional[bool] = None  # None = the table has no sync column
     card_type: str = ""  # lowercased select name
     props: Dict[str, str] = field(default_factory=dict)  # name -> text
-
-
-def _plain(rich: Any) -> str:
-    if not isinstance(rich, list):
-        return ""
-    return "".join(
-        str(x.get("plain_text") or "") for x in rich if isinstance(x, dict)
-    )
 
 
 def _date_text(date: Any) -> str:
@@ -469,7 +452,7 @@ def _prop_text(prop: dict) -> str:
     kind = prop.get("type")
     value = _value(prop)
     if kind in ("title", "rich_text"):
-        return _plain(value)
+        return plain_text(value)
     if kind in ("select", "status"):
         return str((value or {}).get("name") or "")
     if kind in ("multi_select", "people"):
@@ -821,7 +804,7 @@ def table_note_types(col) -> Dict[str, int]:
         for db_id, mid in stored.items():
             mid = _int_id(mid)
             if mid is not None and col.models.get(mid) is not None:
-                out[_bare(str(db_id))] = mid
+                out[bare_id(str(db_id))] = mid
     return out
 
 
@@ -897,10 +880,10 @@ def set_table_note_types(col, changes: Dict[str, int]) -> bool:
     stored = registry.get(TABLES_KEY)
     tables: Dict[str, int] = {}
     if isinstance(stored, dict):
-        tables = {_bare(str(k)): v for k, v in stored.items() if _int_id(v)}
+        tables = {bare_id(str(k)): v for k, v in stored.items() if _int_id(v)}
     eligible = {mid for mid, _name in eligible_note_types(col)}
     for db_id, mid in changes.items():
-        key = _bare(db_id)
+        key = bare_id(db_id)
         if not mid:
             tables.pop(key, None)
         elif mid in eligible:
@@ -1139,7 +1122,7 @@ def fetch_pages(
                     result,
                     str(e),
                     page_id=page_id,
-                    problem=f"Page {page_id[:8]}...: {_reason(e)}",
+                    problem=f"Page {page_id[:8]}...: {e.reason()}",
                 )
 
         if result.sources and result.incomplete:
@@ -1153,11 +1136,6 @@ def fetch_pages(
         result.cleanup()
         raise
     return result
-
-
-def _reason(error: NotionError) -> str:
-    reason = getattr(error, "reason", None)
-    return reason() if callable(reason) else str(error)
 
 
 def _fetch_page(
@@ -1303,7 +1281,7 @@ def _page_cards(
                 result,
                 f"Page {data.title}: {e}",
                 page_id=page_id,
-                problem=f"Page '{data.title}': {_reason(e)}",
+                problem=f"Page '{data.title}': {e.reason()}",
             )
             return
     seen: Set[str] = set()
@@ -1322,7 +1300,7 @@ def _page_cards(
                 result,
                 f"Card in '{data.title}': {e}",
                 page_id=page_id,
-                problem=f"Card in '{data.title}': {_reason(e)}",
+                problem=f"Card in '{data.title}': {e.reason()}",
             )
             continue
         if row is None:
@@ -1466,7 +1444,7 @@ def _resolve_table(
     db = client.get_database(db_id)
     ds = data_source_of(db) or {}
     title = (
-        "".join(t.get("plain_text", "") for t in db.get("title", [])).strip()
+        plain_text(db.get("title")).strip()
         or ds.get("name", "").strip()
         or block_title
         or "Table"
@@ -1504,7 +1482,7 @@ def _fetch_table(
                 f"Table {block_title or db_id}: {e}",
                 page_id,
                 db_id,
-                f"Table '{block_title or db_id}'{where}: {_reason(e)}",
+                f"Table '{block_title or db_id}'{where}: {e.reason()}",
             )
             return None
     table = TableData(title=deck_safe(title), db_id=db_id, raw_title=title)
@@ -1534,7 +1512,7 @@ def _fetch_table(
                 f"Table '{title}': {error}",
                 page_id,
                 db_id,
-                f"Table '{title}'{where}: {_reason(error)}",
+                f"Table '{title}'{where}: {error.reason()}",
             )
             return table
         rows = retried
@@ -1542,15 +1520,9 @@ def _fetch_table(
 
     now = time.time()
     for index, row in enumerate(rows, 1):
-        front = ""
-        live_title = False
-        for prop in row.get("properties", {}).values():
-            if prop.get("type") == "title":
-                front = "".join(
-                    x.get("plain_text", "") for x in prop.get("title", [])
-                ).strip()
-                live_title = _has_live_mention(prop.get("title"))
-                break
+        title_rich = title_rich_text(row)
+        front = plain_text(title_rich).strip()
+        live_title = _has_live_mention(title_rich)
         if not front and not bool(
             result.config.get("include_empty_cards", True)
         ):
@@ -1609,7 +1581,7 @@ def _fetch_table(
                 f"Row '{front}' in '{title}': {e}",
                 page_id,
                 db_id,
-                f"Row '{front}' in '{title}': {_reason(e)}",
+                f"Row '{front}' in '{title}': {e.reason()}",
             )
             continue
         result.fetched[row_id] = RowState(
@@ -1620,7 +1592,7 @@ def _fetch_table(
             db_id,
             1 if recorder.volatile or live_title else 0,
         )
-        if kind == "basic" or (kind == "cloze" and _CLOZE.search(front)):
+        if kind == "basic" or (kind == "cloze" and has_cloze(front)):
             # the title is the field itself: Anki reads fields as HTML
             front = html.escape(front, quote=False)
         table.rows.append(
@@ -1638,10 +1610,6 @@ def _fetch_table(
             )
         )
     return table
-
-
-# Anki's cloze syntax: {{c1::hidden text}}
-_CLOZE = re.compile(r"\{\{c\d+::")
 
 
 @dataclass(frozen=True)
@@ -1706,7 +1674,7 @@ def split_hint(blocks: List[dict]) -> Tuple[List[dict], List[dict]]:
     for start, block in enumerate(blocks):
         if block.get("type") != "heading_4":
             continue
-        text = _plain((block.get("heading_4") or {}).get("rich_text"))
+        text = plain_text((block.get("heading_4") or {}).get("rich_text"))
         if text.strip().lower() != HINT_HEADING:
             continue
         rest = blocks[start + 1 :]
@@ -1776,7 +1744,7 @@ def _render_blocks(
     back = render_blocks(blocks, media, tree)
     if card_type == "basic":
         return "basic", back, hint, [], None
-    if _CLOZE.search(title) or _CLOZE.search(back):
+    if has_cloze(title) or has_cloze(back):
         return "cloze", back, hint, [], None
     if card_type == "cloze":
         result.warnings.append(
@@ -1786,11 +1754,9 @@ def _render_blocks(
     return "basic", back, hint, [], None
 
 
-def _bare(notion_id: str) -> str:
+def bare_id(notion_id: str) -> str:
+    """Return a Notion id without dashes, in lowercase."""
     return str(notion_id or "").replace("-", "").lower()
-
-
-bare_id = _bare
 
 
 def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
@@ -1820,9 +1786,9 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
     for page_id, entry in result.previous.pages.items():
         if page_id in result.page_ids:
             for db_id, _title in entry[2]:
-                tables[_bare(db_id)] = (page_id, db_id)
+                tables[bare_id(db_id)] = (page_id, db_id)
     for db_id, page_id in result.db_pages.items():
-        tables[_bare(db_id)] = (page_id, db_id)
+        tables[bare_id(db_id)] = (page_id, db_id)
     now = time.time()
     asked = {**result.previous.checked, **result.checked}
     # never asked first, then the longest ago; rows asked within the last
@@ -1848,7 +1814,7 @@ def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
             continue
         result.protected.add(source_id)  # it exists: keep its note
         parent = row.get("parent") or {}
-        known = tables.get(_bare(parent.get("database_id") or ""))
+        known = tables.get(bare_id(parent.get("database_id") or ""))
         if known is not None:
             result.recovered[source_id] = RowState(
                 "", 0.0, "", known[0], known[1]
@@ -1894,7 +1860,7 @@ def _download_media(
             failed.add(fname)
             continue
         if not ext:
-            ext = _sniff_ext(blob) or ".bin"
+            ext = _sniff_ext(blob)
             path += ext
         with open(path, "wb") as f:
             f.write(blob)
@@ -2076,7 +2042,7 @@ def _guard_cloze(line: str) -> str:
     A line holding a cloze marker of its own is left as written: its
     markers are meant (nested clozes), so the line is wrapped as it is.
     """
-    if _CLOZE.search(line):
+    if has_cloze(line):
         return line
     line = line.replace("}}", "}&#125;").replace("::", ":&#58;")
     return line[:-1] + "&#125;" if line.endswith("}") else line
@@ -2128,7 +2094,7 @@ def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
             f'{style}{shown}<div class="{wrap}">{"".join(lines)}</div>',
             "",
         ]
-    elif row.kind == "cloze" and _CLOZE.search(title):
+    elif row.kind == "cloze" and has_cloze(title):
         fields = [title, back]
     elif row.kind == "cloze":
         fields = [shown + back, ""]
@@ -2534,7 +2500,7 @@ def _chosen_model(
     col, chosen: Dict[str, int], table: TableData, result: SyncResult
 ) -> Optional[dict]:
     """Return the note type chosen for a table's new rows (None = default)."""
-    mid = chosen.get(_bare(table.db_id))
+    mid = chosen.get(bare_id(table.db_id))
     if not mid:
         return None
     model = col.models.get(mid)

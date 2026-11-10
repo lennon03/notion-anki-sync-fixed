@@ -278,9 +278,7 @@ def _notion_is_quiet(token: str, since: float) -> bool:
     still newer than it when it finally shows up.
     """
     try:
-        found = addon_sync.NotionClient(token)._request(
-            "POST",
-            "/search",
+        found = addon_sync.NotionClient(token).search(
             {
                 "sort": {
                     "timestamp": "last_edited_time",
