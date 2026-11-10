@@ -360,3 +360,25 @@ def test_a_failed_page_read_keeps_existing_page_cards(env):
     env.notion.fail = {("page", P1)}
     env.sync()
     assert env.count() == before
+
+
+def test_page_cards_of_a_failed_page_cost_no_row_lookup(env):
+    """C11: a page card's Source is a block id, so GET /pages can't help."""
+    import os
+
+    _write(env, _h(3, "A?", 1), _p("a", 2), _h(3, "B?", 3), _p("b", 4))
+    env.sync()
+    env.notion.fail = {("page", P1)}
+    env.notion.calls.clear()
+    env.sync()
+    # the cache knows these are the page's cards: nothing is asked
+    assert ("page", _b(1)) not in env.notion.calls
+
+    # without the cache (a new device) each is asked once, then not for a day
+    os.remove(env.path)
+    env.notion.calls.clear()
+    env.sync()
+    assert ("page", _b(1)) in env.notion.calls
+    env.notion.calls.clear()
+    env.sync()
+    assert ("page", _b(1)) not in env.notion.calls

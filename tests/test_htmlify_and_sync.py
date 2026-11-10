@@ -790,8 +790,10 @@ def test_invalid_json_is_a_notion_error(monkeypatch):
 
     client = NotionClient("t")
     monkeypatch.setattr(client, "_connection", lambda: Conn())
-    with pytest.raises(NotionError):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    with pytest.raises(NotionError) as caught:
         client.get_page("p")
+    assert caught.value.transient
 
 
 def test_fetch_cleans_temp_dir_on_unexpected_error(monkeypatch):

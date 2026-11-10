@@ -51,13 +51,19 @@ in a common case, **low** = edge case or robustness.
   There is still no size limit; disk space is the only bound.
 - [x] **C9 (low) `get_block_children` uses `assert` for a missing cursor.**
   An `AssertionError` escapes every `except NotionError` and fails the sync.
-- [ ] **C10 (low) A 2xx answer that is not JSON is marked transient but not
-  retried.**
+- [x] **C10 (low) A 2xx answer that is not JSON is marked transient but not
+  retried.** *Done:* it is retried like a network error, within the same
+  attempt limit.
 - [ ] **C11 (low) `_check_unlisted` asks `GET /pages/<id>` about page-card
   notes.** Their Source is a block id, so the answer is always 404 and they use
   up the 25 lookups a sync allows.
-- [ ] **C12 (low) `_file_safe` cuts a long file name at 120 characters from
-  the left, dropping the extension.**
+  *Checked, left as is:* page cards the cache knows (`pagecards:` origin)
+  are never asked. Only a note with no cache entry (a new device) is asked,
+  once a day like any unshared row, and a Source alone can't tell a block
+  from a row; the fix (`GET /blocks/<id>`) needs a real workspace to verify.
+- [x] **C12 (low) `_file_safe` cuts a long file name at 120 characters from
+  the left, dropping the extension.** *Done:* the name is cut before its
+  extension, which is kept.
 - [x] **C13 (low) `sync_every_minutes` holding text raises in the profile-open
   hook** (`int()` in `_schedule_autosync`).
 
@@ -81,13 +87,17 @@ in a common case, **low** = edge case or robustness.
   of `_render_block` (the type is filtered out before); `_sniff_ext(...) or
   ".bin"`; the slug loop in `canonical_page_id`; `_reason()` (every
   `NotionError` has `reason`); the `bare_id` alias.
-- [ ] **S2 The title of a Notion object is extracted in four places**
+- [x] **S2 The title of a Notion object is extracted in four places**
   (`page_title`, a loop in `_fetch_table`, `_resolve_table`,
   `export_read.describe`) and rich text is joined to plain text in three
   (`sync._plain`, `htmlify._plain`, `pagecards.rt_text`).
   *Partly done:* titles go through `title_rich_text`/`plain_text` in
   `notion_api.py`; `htmlify._plain` and `pagecards.rt_text` remain (they read
   `text.content`, not `plain_text`).
+  *Done:* `htmlify._plain` was `plain_text(...).strip()` and now calls it.
+  `pagecards.rt_text` stays: it reads `text.content` because
+  `_split_rich_lines` and the page card helpers cut that and leave
+  `plain_text` as Notion sent it, so `plain_text` would be wrong there.
 - [x] **S3 The worker calls the client's private `_request` for `/search` and
   `/users/me`** in three places. Two public methods remove that.
 - [x] **S4 `_apply_card_style` and `_apply_note_types` in `__init__.py` are
@@ -113,7 +123,7 @@ in a common case, **low** = edge case or robustness.
   or `BlockTree` on `sync` now replace them on `fetch`. *Remaining:*
   choosing a card's kind (`_render_blocks`, `split_hint`,
   `_page_card_type`) still lives in `fetch.py`, and `_render_blocks` still
-  returns a five-value tuple.
+  returns a five-value tuple. *Done:* it returns a `Rendered` dataclass.
 
 ## Worker
 

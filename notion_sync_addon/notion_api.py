@@ -133,11 +133,15 @@ class NotionClient:
                 try:
                     return json.loads(payload.decode("utf-8"))
                 except ValueError as e:  # truncated or non-JSON body
-                    raise NotionError(
-                        f"Invalid response from Notion for {path}: {e}",
-                        status,
-                        transient=True,
-                    ) from e
+                    # a proxy page or a cut answer: retry like a network error
+                    if attempt > MAX_RETRIES:
+                        raise NotionError(
+                            f"Invalid response from Notion for {path}: {e}",
+                            status,
+                            transient=True,
+                        ) from e
+                    time.sleep(RETRY_BACKOFF_SECONDS * (attempt - 1))
+                    continue
             if status == 429 or status >= 500:
                 if attempt > MAX_RETRIES:
                     raise NotionError(

@@ -17,10 +17,15 @@ from __future__ import annotations
 
 import copy
 import html
+import os
 import re
 from typing import Any, Dict, List, Optional
 
 from .highlight import highlight, language_slug
+from .notion_api import plain_text
+
+MAX_FILE_NAME = 120
+MAX_EXTENSION = 10  # longest kept extension, dot included
 
 
 class MediaCollector:
@@ -63,9 +68,16 @@ def _file_safe(name: str) -> str:
     Lowercase only: on Windows Anki stores the first copy of a file under a
     lowercased name but returns the name as given when the same file is
     added again, so a mixed-case name would flip between syncs (and not
-    match the stored file on case-sensitive AnkiDroid/iOS).
+    match the stored file on case-sensitive AnkiDroid/iOS). A long name is
+    cut to ``MAX_FILE_NAME`` characters before its extension, which is kept.
     """
-    return re.sub(r"[^a-z0-9_.\-]+", "_", name.lower())[:120] or "media"
+    name = re.sub(r"[^a-z0-9_.\-]+", "_", name.lower())
+    if len(name) > MAX_FILE_NAME:
+        stem, ext = os.path.splitext(name)
+        if len(ext) > MAX_EXTENSION:  # a dot in a long name, not a type
+            stem, ext = name, ""
+        name = stem[: MAX_FILE_NAME - len(ext)] + ext
+    return name or "media"
 
 
 def _attr(text: str) -> str:
@@ -79,10 +91,6 @@ def _esc(text: str) -> str:
 def _math(expression: Any) -> str:
     """Escape a formula: a bare ``<`` would open a tag in Anki's webview."""
     return html.escape(str(expression or ""), quote=False)
-
-
-def _plain(rts: List[dict]) -> str:
-    return "".join(rt.get("plain_text", "") for rt in rts).strip()
 
 
 # --------------------------------------------------------------------- #
@@ -420,7 +428,7 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
     if btype == "toggle":
         return f"<details><summary>{text}</summary>{children_html}</details>"
     if btype == "code":
-        content = _plain(body.get("rich_text") or [])
+        content = plain_text(body.get("rich_text")).strip()
         lang = body.get("language") or ""
         return (
             f'<pre class="ns-code" style="{_CODE_BLOCK_STYLE}">'

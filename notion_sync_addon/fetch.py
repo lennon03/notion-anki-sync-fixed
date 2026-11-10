@@ -12,7 +12,7 @@ import os
 import re
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from .cache import Cache, RowState, _fresh, is_unchanged
@@ -416,24 +416,24 @@ def _render_page_card(
     if not title:
         return None
     answer = tree.strip_blocks(card.blocks)
-    kind, back, hint, lines, overlap = _render_blocks(
+    done = _render_blocks(
         answer, title, _page_card_type(card, answer), media, tree, result
     )
-    if kind == "cloze" and has_cloze(title):
+    if done.kind == "cloze" and has_cloze(title):
         front = rich_text_to_html(title_rts).strip()
-    elif kind == "basic":
+    elif done.kind == "basic":
         front = html.escape(title, quote=False)
     else:
         front = title
     return RowCard(
         card.source_id,
         front,
-        back,
+        done.back,
         url=url,
-        context_html=hint,
-        kind=kind,
-        lines=lines,
-        overlap=overlap,
+        context_html=done.hint,
+        kind=done.kind,
+        lines=done.lines,
+        overlap=done.overlap,
     )
 
 
@@ -649,7 +649,7 @@ def _fetch_table(
         recorder = _RecordingTree(tree)
         struck = StrikeTags(recorder)
         try:
-            kind, back, context, lines, overlap = _render_row(
+            done = _render_row(
                 row["id"], front, columns.card_type, media, struck, result
             )
         except NotionError as e:
@@ -671,21 +671,21 @@ def _fetch_table(
             db_id,
             1 if recorder.volatile or live_title else 0,
         )
-        if kind == "basic" or (kind == "cloze" and has_cloze(front)):
+        if done.kind == "basic" or (done.kind == "cloze" and has_cloze(front)):
             # the title is the field itself: Anki reads fields as HTML
             front = html.escape(front, quote=False)
         table.rows.append(
             RowCard(
                 source_id=row_id,
                 front=front,
-                back_html=back,
-                context_html=context,
+                back_html=done.back,
+                context_html=done.hint,
                 url=row.get("url", ""),
                 tags=[TAG_PREFIX + t for t in clean_tags(struck.tags)],
                 columns=columns,
-                kind=kind,
-                lines=lines,
-                overlap=overlap,
+                kind=done.kind,
+                lines=done.lines,
+                overlap=done.overlap,
             )
         )
     return table
@@ -718,6 +718,17 @@ def split_hint(blocks: List[dict]) -> Tuple[List[dict], List[dict]]:
     return blocks, []
 
 
+@dataclass
+class Rendered:
+    """A rendered row or page card, before it becomes a ``RowCard``."""
+
+    kind: str  # "basic", "cloze" or "overlapping"
+    back: str  # page HTML (the joined lines for an overlapping cloze)
+    hint: str  # the collapsed Hint section, or ""
+    lines: List[str] = field(default_factory=list)  # overlapping lines
+    overlap: Optional[OverlapSpec] = None  # overlapping options
+
+
 def _render_row(
     row_id: str,
     title: str,
@@ -725,11 +736,11 @@ def _render_row(
     media: MediaCollector,
     tree: Any,
     result: SyncResult,
-) -> Tuple[str, str, str, List[str], Optional[OverlapSpec]]:
-    """Download and render a row: (kind, page HTML, hint HTML, lines of an
-    overlapping cloze, its options). The page is read once; the "Card type"
-    column decides the kind, otherwise a cloze marker in the title or page
-    makes it a cloze.
+) -> Rendered:
+    """Download and render a row.
+
+    The page is read once; the "Card type" column decides the kind,
+    otherwise a cloze marker in the title or page makes it a cloze.
     """
     return _render_blocks(
         tree.children(row_id), title, card_type, media, tree, result
@@ -743,7 +754,7 @@ def _render_blocks(
     media: MediaCollector,
     tree: Any,
     result: SyncResult,
-) -> Tuple[str, str, str, List[str], Optional[OverlapSpec]]:
+) -> Rendered:
     """Render the blocks of a row or page card (see ``_render_row``)."""
     blocks, hint_blocks = split_hint(all_blocks)
     hint = ""
@@ -765,23 +776,25 @@ def _render_blocks(
         lines = render_lines(blocks, media, tree)
         if lines:
             options = None if spec == OverlapSpec() else spec
-            return "overlapping", "\n".join(lines), hint, lines, options
+            return Rendered(
+                "overlapping", "\n".join(lines), hint, lines, options
+            )
         result.warnings.append(
             f"Row '{title}': Card type is Overlapping but the page has no "
             "line; made a basic card"
         )
-        return "basic", "", hint, [], None
+        return Rendered("basic", "", hint)
     back = render_blocks(blocks, media, tree)
     if card_type == "basic":
-        return "basic", back, hint, [], None
+        return Rendered("basic", back, hint)
     if has_cloze(title) or has_cloze(back):
-        return "cloze", back, hint, [], None
+        return Rendered("cloze", back, hint)
     if card_type == "cloze":
         result.warnings.append(
             f"Row '{title}': Card type is Cloze but no {{{{c1::...}}}} "
             "was found; made a basic card"
         )
-    return "basic", back, hint, [], None
+    return Rendered("basic", back, hint)
 
 
 def _check_unlisted(client: NotionClient, result: SyncResult) -> None:
