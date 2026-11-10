@@ -35,11 +35,11 @@ in a common case, **low** = edge case or robustness.
   whole string") turns arbitrary text into an id, which then fails as a Notion
   page instead of being reported as an invalid entry; the loop before it can
   never match anything the regular expression above it did not.
-- [ ] **C6 (medium) Page mentions in a normal-page card are not re-checked
+- [x] **C6 (medium) Page mentions in a normal-page card are not re-checked
   hourly.** `_RecordingTree` only sees blocks fetched through `children()`;
   a page card's own blocks and question come from the page listing, so a
   mention there never marks the card volatile. Table rows do it right.
-- [ ] **C7 (low) A page card's `fetched_at` is taken when the card is
+- [x] **C7 (low) A page card's `fetched_at` is taken when the card is
   rendered, not when the page's blocks were read.** On a page with many cards
   the cache can claim content is newer than it is.
 - [ ] **C8 (medium) Media is downloaded into memory, with no size limit.**
@@ -55,7 +55,7 @@ in a common case, **low** = edge case or robustness.
   up the 25 lookups a sync allows.
 - [ ] **C12 (low) `_file_safe` cuts a long file name at 120 characters from
   the left, dropping the extension.**
-- [ ] **C13 (low) `sync_every_minutes` holding text raises in the profile-open
+- [x] **C13 (low) `sync_every_minutes` holding text raises in the profile-open
   hook** (`int()` in `_schedule_autosync`).
 
 ## Core: improvements

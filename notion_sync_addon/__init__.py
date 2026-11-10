@@ -540,7 +540,10 @@ def _start_followup_sync() -> None:
 def _schedule_autosync() -> None:
     stop_autosync()
     cfg = _config()
-    interval_minutes = int(cfg.get("sync_every_minutes") or 0)
+    try:
+        interval_minutes = int(cfg.get("sync_every_minutes") or 0)
+    except (TypeError, ValueError):  # config edited by hand
+        interval_minutes = 0
     if interval_minutes <= 0:
         return
 

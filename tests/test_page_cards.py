@@ -322,6 +322,20 @@ def test_unchanged_page_makes_no_download_and_edits_update_one_card(env):
     )
 
 
+def test_a_page_mention_in_a_card_is_checked_again_within_the_hour(env):
+    mention = {
+        "type": "mention",
+        "plain_text": "Other page",
+        "mention": {"type": "page", "page": {"id": "f" * 32}},
+    }
+    answer = _p("see ", 2)
+    answer["paragraph"]["rich_text"].append(mention)
+    _write(env, _h(3, "A?", 1), answer, _h(3, "B?", 3), _p("b", 4))
+    env.sync()
+    states = env.result.fetched
+    assert states[_b(1)].volatile == 1 and states[_b(3)].volatile == 0
+
+
 def test_deleting_a_block_removes_its_card_and_edits_keep_its_note(env):
     _write(env, _h(3, "A?", 1), _p("a", 2), _h(3, "B?", 3), _p("b", 4))
     env.sync()

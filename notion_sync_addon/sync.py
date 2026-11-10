@@ -1187,7 +1187,17 @@ def _fetch_page(
     _collect_page_children(
         page_id, client, tree, media, data, result, blocks=blocks
     )
-    _page_cards(page_id, edited, blocks, client, tree, media, data, result)
+    _page_cards(
+        page_id,
+        edited,
+        blocks,
+        client,
+        tree,
+        media,
+        data,
+        result,
+        read_at=fetched_at,
+    )
     # a page with any failure keeps its previous cache entry: a table that
     # could not be read must not vanish from the cached table list
     if edited and result.failures == failures:
@@ -1240,12 +1250,14 @@ def _page_cards(
     data: PageData,
     result: SyncResult,
     read_before: bool = False,
+    read_at: float = 0.0,
 ) -> None:
     """Read the cards written as text in a page (see pagecards.py).
 
     ``blocks`` is None when the page itself is unchanged: its cards are
     then reused, unless one is missing from the cache or has to be checked
-    again, in which case the page's blocks are read.
+    again, in which case the page's blocks are read. ``read_at`` is when
+    ``blocks`` were read: the cards are no newer than that.
     """
     if not result.config.get("page_cards", True):
         return
@@ -1275,6 +1287,7 @@ def _page_cards(
         if not listed and read_before:
             return  # read before, and it held no card
         try:
+            read_at = time.time()
             blocks = tree.children(page_id)
         except NotionError as e:
             _fail(
@@ -1291,7 +1304,6 @@ def _page_cards(
         seen.add(card.source_id)
         recorder = _RecordingTree(tree)
         strike = StrikeTags(recorder)
-        fetched_at = time.time()
         try:
             row = _render_page_card(card, url, media, strike, result)
         except NotionError as e:
@@ -1306,13 +1318,20 @@ def _page_cards(
         if row is None:
             continue
         row.tags = [TAG_PREFIX + t for t in clean_tags(strike.tags)]
+        # the card's own blocks came with the page listing, not through
+        # the recorder: check them for mentions and synced copies here
+        volatile = (
+            recorder.volatile
+            or _has_live_mention(card.title)
+            or any(_is_volatile(b) for b in card.blocks)
+        )
         result.fetched[card.source_id] = RowState(
             edited,
-            fetched_at,
+            read_at or time.time(),
             "",
             page_id,
             marker,
-            1 if recorder.volatile else 0,
+            1 if volatile else 0,
         )
         table.rows.append(row)
     if table.rows:
