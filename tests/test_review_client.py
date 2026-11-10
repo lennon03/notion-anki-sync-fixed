@@ -21,6 +21,20 @@ def test_text_that_only_holds_hex_letters_is_not_a_page_id():
         canonical_page_id("a decade of faded facade: bad cafe, dead beef")
 
 
+def test_a_query_stops_once_it_has_more_rows_than_asked_for(monkeypatch):
+    client = NotionClient("token")
+    asked = []
+
+    def request(method, path, data=None):
+        asked.append(data)
+        rows = [{"id": str(len(asked))}] * 100
+        return {"results": rows, "has_more": True, "next_cursor": "next"}
+
+    monkeypatch.setattr(client, "_request", request)
+    rows = client.query_data_source("ds", stop_after=150)
+    assert len(rows) == 200 and len(asked) == 2
+
+
 def test_block_children_stop_when_notion_sends_no_cursor(monkeypatch):
     client = NotionClient("token")
     answers = [

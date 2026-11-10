@@ -136,7 +136,9 @@ def describe(client: NotionClient, raw_id: str) -> Dict[str, Any]:
 
 def table_rows(client: NotionClient, raw_id: str) -> List[Dict[str, str]]:
     """List the rows of a table (data source): id and title, in order."""
-    rows = client.query_data_source(valid_id(raw_id), title_only=True)
+    rows = client.query_data_source(
+        valid_id(raw_id), title_only=True, stop_after=MAX_ROWS
+    )
     if len(rows) > MAX_ROWS:
         raise TooLarge()
     return [

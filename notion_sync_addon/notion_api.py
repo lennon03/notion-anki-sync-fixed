@@ -190,13 +190,18 @@ class NotionClient:
         return self._request("GET", f"/data_sources/{data_source_id}")
 
     def query_data_source(
-        self, data_source_id: str, title_only: bool = False
+        self,
+        data_source_id: str,
+        title_only: bool = False,
+        stop_after: int = 0,
     ) -> List[dict]:
         """All row pages of a data source, following pagination.
 
         Every property comes back by default: the sync reads its checkbox,
         tags and other columns from the listing (same number of requests).
         ``title_only`` asks Notion for just the title property instead.
+        ``stop_after`` stops asking once more rows than that have come
+        back (0 = read them all): for callers that refuse a larger table.
         """
         out: List[dict] = []
         path = f"/data_sources/{data_source_id}/query"
@@ -209,6 +214,8 @@ class NotionClient:
                 payload["start_cursor"] = data["next_cursor"]
             data = self._request("POST", path, payload)
             out += data.get("results", [])
+            if stop_after and len(out) > stop_after:
+                break
         return out
 
     def search(self, body: dict) -> dict:

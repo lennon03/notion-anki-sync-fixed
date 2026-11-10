@@ -110,7 +110,7 @@ class FakeReader:
             return {"data_sources": [{"id": "8" * 32, "name": "Inner"}]}
         return {"data_sources": [{"id": self.TABLE, "name": "Source name"}]}
 
-    def query_data_source(self, source_id, title_only=False):
+    def query_data_source(self, source_id, title_only=False, stop_after=0):
         self._ask("rows", source_id)
         if source_id != self.TABLE:
             raise NotionError("missing", status=404)
