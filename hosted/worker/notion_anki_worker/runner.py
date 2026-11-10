@@ -105,6 +105,7 @@ class Runner:
             notion_token=token,
             page_ids=pages,
             full=full,
+            options=store.options(),
         )
 
     def start(self, trigger: str, full: bool = False) -> Optional[int]:

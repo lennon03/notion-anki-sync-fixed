@@ -686,6 +686,38 @@ def test_page_list_renews_a_rejected_sign_in_once(h):
     assert h.oauth.refreshes == 1 and len(seen) == 2
 
 
+def test_sync_options_are_stored_shown_and_used(h):
+    h.connect()
+    h.add_page()
+    assert h.status()["options"]["sync_column"] == "Anki"
+    for options in ({"sync_column": "Learn"}, {"page_cards": False}):
+        response = h.client.put(
+            "/config", json={"options": options}, headers=h.headers
+        )
+        assert response.status_code == 200, response.text
+    shown = h.status()["options"]
+    assert shown["sync_column"] == "Learn" and shown["page_cards"] is False
+    assert shown["include_empty_cards"] is True
+    h.sync()
+    assert h.requests[0].options == {
+        "sync_column": "Learn",
+        "page_cards": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"page_cards": "no"}, {"notion_token": "x"}, {"sync_column": 1}],
+)
+def test_sync_options_are_validated(h, options):
+    response = h.client.put(
+        "/config", json={"options": options}, headers=h.headers
+    )
+    assert response.status_code == 422
+    assert response.json()["error"] == "invalid_request"
+    assert h.status()["options"]["page_cards"] is True
+
+
 def test_config_survives_a_token_that_cannot_be_decrypted(h):
     h.connect()
     h.app.state.store.put("notion_token", "v1:not:valid")

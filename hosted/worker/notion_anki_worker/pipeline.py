@@ -48,6 +48,14 @@ FULL_CHECK_SECONDS = addon_sync.VOLATILE_MAX_AGE_SECONDS
 
 Say = Callable[[str], None]
 
+# add-on options the owner can set for the hosted sync
+SYNC_OPTIONS = (
+    "include_empty_cards",
+    "page_cards",
+    "sync_column",
+    "card_type_column",
+)
+
 FULL_SYNC_MESSAGE = (
     "AnkiWeb needs a full sync, so nothing was changed. Sync from Anki "
     "desktop and choose which side to keep, then run Sync now."
@@ -106,6 +114,7 @@ class RunRequest:
     notion_token: str = field(repr=False)
     page_ids: List[str]
     full: bool = False
+    options: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -150,15 +159,28 @@ class _Session:
             log.warning("Closing the collection failed", exc_info=True)
 
 
-def addon_config(token: str, page_ids: List[str]) -> dict:
-    """Build the add-on's config dict: its defaults plus token and pages."""
+def addon_config(
+    token: str, page_ids: List[str], options: Optional[Dict[str, Any]] = None
+) -> dict:
+    """Build the add-on's config dict: its defaults, the options set for
+    the hosted sync, the token and the pages.
+    """
     addon_dir = Path(addon_sync.__file__).parent
     config = json.loads(
         (addon_dir / "config.json").read_text(encoding="utf-8")
     )
+    for key, value in (options or {}).items():
+        if key in SYNC_OPTIONS:
+            config[key] = value
     config["notion_token"] = token
     config["notion_pages"] = [{"page_id": p} for p in page_ids]
     return config
+
+
+def sync_options(options: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the options a run uses: stored ones over the defaults."""
+    config = addon_config("", [], options)
+    return {key: config[key] for key in SYNC_OPTIONS}
 
 
 def _migrate_legacy_media(paths: Paths) -> None:
@@ -315,6 +337,7 @@ def _nothing_to_do(
         return False
     if (
         state.get("pages") != sorted(request.page_ids)
+        or state.get("options", {}) != request.options
         or state.get("render") != addon_sync.RENDER_VERSION
         or state.get("notes") != _notes_signature(col)
         or time.time() - float(state.get("full_at", 0)) >= FULL_CHECK_SECONDS
@@ -485,7 +508,9 @@ def _run(
         say("Reading Notion")
         read_at = time.time()
         result = addon_sync.fetch_pages(
-            addon_config(request.notion_token, request.page_ids),
+            addon_config(
+                request.notion_token, request.page_ids, request.options
+            ),
             prepared.known,
             _throttled(say),
             prepared.structure,
@@ -529,6 +554,7 @@ def _run(
                         "watermark": read_at,
                         "full_at": read_at,
                         "pages": sorted(request.page_ids),
+                        "options": request.options,
                         "render": addon_sync.RENDER_VERSION,
                         "notes": _notes_signature(col),
                     }

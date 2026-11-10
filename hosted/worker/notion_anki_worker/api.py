@@ -26,7 +26,7 @@ from notion_anki_worker import store as st
 from notion_anki_worker.config import Settings
 from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import register
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictBool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from notion_sync_addon.notion_api import NotionClient, NotionError, page_title
@@ -80,11 +80,24 @@ class ConnectBody(_Body):
     ankiweb: AnkiWebLogin
 
 
+class SyncOptions(_Body):
+    """Add-on options for the hosted sync; one left out keeps its value.
+
+    An empty column name turns that column off, as in the add-on.
+    """
+
+    include_empty_cards: Optional[StrictBool] = None
+    page_cards: Optional[StrictBool] = None
+    sync_column: Optional[str] = Field(default=None, max_length=100)
+    card_type_column: Optional[str] = Field(default=None, max_length=100)
+
+
 class ConfigBody(_Body):
     """``PUT /config``."""
 
     pages: Optional[List[str]] = Field(default=None, max_length=MAX_PAGES)
     schedule_minutes: Optional[int] = None
+    options: Optional[SyncOptions] = None
 
 
 class OAuthFinishBody(_Body):
@@ -292,6 +305,7 @@ def create_app(
             "notion_oauth_available": oauth is not None,
             "pages": store.pages(),
             "schedule_minutes": store.schedule_minutes(),
+            "options": pipeline.sync_options(store.options()),
             "next_run_at": scheduler.next_run_at(),
             "running": runner.running,
             "latest": latest,
@@ -479,6 +493,10 @@ def create_app(
                     422, "invalid_schedule", "Pick one of the schedules."
                 )
             store.put(st.KEY_SCHEDULE, str(body.schedule_minutes))
+        if body.options is not None:
+            options = store.options()
+            options.update(body.options.model_dump(exclude_none=True))
+            store.put(st.KEY_OPTIONS, json.dumps(options))
         if body.pages is not None:
             try:
                 ids = list(

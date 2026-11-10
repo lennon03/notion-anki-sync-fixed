@@ -22,6 +22,7 @@ KEY_NOTION_WORKSPACE = "notion_workspace"
 KEY_ENDPOINT = "ankiweb_endpoint"
 KEY_PAGES = "notion_pages"
 KEY_SCHEDULE = "schedule_minutes"
+KEY_OPTIONS = "sync_options"
 
 MAX_RUNS = 50
 MAX_LOG_LINES = 500
@@ -148,6 +149,10 @@ class Store:
     def schedule_minutes(self) -> int:
         """Return the schedule; 0 means manual only."""
         return int(self.get(KEY_SCHEDULE) or 0)
+
+    def options(self) -> Dict[str, Any]:
+        """Return the add-on options set for the hosted sync."""
+        return json.loads(self.get(KEY_OPTIONS) or "{}")
 
     def forget_credentials(self) -> None:
         """Delete the host key, its endpoint and the Notion token."""

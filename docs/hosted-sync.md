@@ -47,6 +47,13 @@ drives `prepare_sync` / `fetch_pages` / `apply_sync` the same way the add-on's
 
 Each run logs how long its steps took (`Timings: ...`).
 
+**Sync options.** `PUT /config` takes `options` with any of the add-on's
+`include_empty_cards`, `page_cards` (true or false), `sync_column` and
+`card_type_column` (a column name, empty turns the column off). Options left
+out keep their value; the add-on's defaults apply until one is set. As in the
+add-on, a changed option applies to what the next run reads; a changed option
+also skips the shortcut once. The site has no form for them yet.
+
 **The worker never uploads a full collection.** `full_upload_or_download` is
 called in one place, with `upload=False`. A test fails if anything calls it
 with `upload=True`. The local copy never holds anything AnkiWeb lacks, other
@@ -78,7 +85,7 @@ them.
 | What | Where | Note |
 | --- | --- | --- |
 | `ankiweb_hkey`, `notion_token`, `notion_refresh_token` | `settings` table | AES-256-GCM, the key name is authenticated too |
-| AnkiWeb endpoint, pages, schedule | `settings` table | not secret |
+| AnkiWeb endpoint, pages, schedule, sync options | `settings` table | not secret |
 | Run history (status, stats, warnings, log) | `runs` table | newest 50, scrubbed of secrets; a log over 500 lines keeps its start and end |
 | Row cache | `cache/notion-cache.json` | no secrets, written after a good push only |
 | Backups | `backups/before-*.colpkg` | card content, no credentials |
@@ -97,7 +104,7 @@ and the download also need `X-Session-Token`.
 | --- | --- |
 | `GET /health` | liveness, no details |
 | `POST /session` | password -> session token (rate limited) |
-| `GET /status` | connection flags, pages, schedule, runs, backups, needed action |
+| `GET /status` | connection flags, pages, schedule, sync options, runs, backups, needed action |
 | `POST /connect` | `ankiweb: {username, password}` (rate limited); Notion connects only through its sign-in |
 | `DELETE /connect` | forget the host key and the token |
 | `POST /notion/oauth/start`, `/finish` | Sign in with Notion; the state is signed by the worker |
@@ -105,7 +112,7 @@ and the download also need `X-Session-Token`.
 | `GET /notion/export/page/{id}` | what an id is (page or table) and the tables on it |
 | `GET /notion/export/table/{id}/rows` | a table's rows: id and title |
 | `GET /notion/export/blocks/{id}` | a row's blocks with their children nested, for the exporter |
-| `PUT /config` | page links, schedule |
+| `PUT /config` | page links, schedule, sync options |
 | `POST /sync` | start a run (409 if one is running) |
 | `POST /backups/{name}/link` | short-lived signed download path |
 | `GET /backups/{name}/download` | the `.colpkg`, with `exp` and `sig` |

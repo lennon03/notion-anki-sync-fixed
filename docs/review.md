@@ -146,8 +146,12 @@ in a common case, **low** = edge case or robustness.
   stored secret can't be decrypted (`NotReady` raised from `tick`).
   *Done:* `tick` skips the run quietly; the start-up log already says once
   that a secret can't be read.
-- [ ] **W8 (improvement) The hosted sync always uses the add-on's default
+- [x] **W8 (improvement) The hosted sync always uses the add-on's default
   options**; `sync_column`, `page_cards` and the others can't be set.
+  *Done:* `PUT /config` takes `options` (`include_empty_cards`,
+  `page_cards`, `sync_column`, `card_type_column`), validated and stored;
+  `GET /status` shows the options in use and each run applies them. Not
+  done: a form on the site (set them through the API for now).
 - [ ] **W9 (low) `table_rows` reads every row before refusing a table with
   more than 1,000.**
 - [x] **W10 (low) A run's log stops silently at 500 lines**, losing the

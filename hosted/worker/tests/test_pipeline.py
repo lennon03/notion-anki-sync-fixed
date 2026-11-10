@@ -415,6 +415,25 @@ def test_cards_of_unknown_origin_are_kept(web, notion, paths, request_):
     assert "front 0" in web.notes()
 
 
+def test_addon_config_applies_only_the_sync_options():
+    cfg = pipeline.addon_config(
+        "tok", [], {"sync_column": "Learn", "notion_token": "other"}
+    )
+    assert cfg["sync_column"] == "Learn"
+    assert cfg["notion_token"] == "tok"
+
+
+def test_changed_options_read_notion(web, notion, paths, request_):
+    run_once(request_, paths, _say)
+    notion.calls.clear()
+    request_.options = {"page_cards": False}
+    run_once(request_, paths, _say)
+    assert notion.calls
+    notion.calls.clear()
+    run_once(request_, paths, _say)
+    assert notion.calls == []
+
+
 def test_addon_config_keeps_defaults_and_adds_pages():
     cfg = pipeline.addon_config("tok", ["a" * 32])
     assert cfg["notion_token"] == "tok"
