@@ -359,66 +359,42 @@ def create_app(
         store.put(st.KEY_NOTION_WORKSPACE, tokens.workspace)
         return {"ok": True}
 
-    @app.get("/notion/pages")
-    def notion_pages(_who: str = Depends(session)) -> Dict[str, Any]:
+    def stored_notion_token() -> Optional[str]:
         try:
-            token = store.get_secret(st.KEY_NOTION)
+            return store.get_secret(st.KEY_NOTION)
         except crypto.DecryptError:
-            token = None
-        if not token:
-            raise ApiError(409, "not_connected", "Connect Notion first.")
-        try:
-            return {"pages": list_pages(token)}
-        except NotionError as e:
-            if e.status == 401:
-                raise ApiError(
-                    400, "notion_token_rejected", "Notion rejected this token."
-                ) from None
-            raise ApiError(
-                502, "notion_unavailable", "Could not reach Notion."
-            ) from None
+            return None
 
     refresh_lock = threading.Lock()
 
     def renewed_token(rejected: str) -> Optional[str]:
         """Swap a rejected Notion sign-in for a fresh one, if possible."""
         with refresh_lock:
-            current = store.get_secret(st.KEY_NOTION)
+            current = stored_notion_token()
             if current and current != rejected:
                 return current  # another request already renewed it
-            refresh = store.get_secret(st.KEY_NOTION_REFRESH)
-            if oauth is None or not refresh:
-                return None
-            try:
-                tokens = oauth.refresh(refresh)
-            except notion_oauth.OAuthError:
-                return None
-            store.put_secret(st.KEY_NOTION, tokens.access)
-            store.put_secret(st.KEY_NOTION_REFRESH, tokens.refresh or refresh)
-            return tokens.access
+            return rn.renew_notion_sign_in(store, oauth)
 
-    def notion_read(read: Callable[[NotionClient], T]) -> T:
-        """Run a read-only Notion lookup with the stored sign-in.
+    def with_notion_token(read: Callable[[str], T]) -> T:
+        """Run a read-only Notion lookup with the stored sign-in, renewing
+        it once if Notion rejects it.
 
         Notion's own errors never reach the response: they can quote the
         request, so each one becomes a fixed message.
         """
-        try:
-            token = store.get_secret(st.KEY_NOTION)
-        except crypto.DecryptError:
-            token = None
+        token = stored_notion_token()
         if not token:
             raise ApiError(409, "not_connected", "Connect Notion first.")
         try:
             try:
-                return read(notion_client(token))
+                return read(token)
             except NotionError as e:
                 if e.status != 401:
                     raise
                 fresh = renewed_token(token)
                 if fresh is None:
                     raise
-                return read(notion_client(fresh))
+                return read(fresh)
         except export_read.TooLarge:
             raise ApiError(
                 413, "too_large", "That is more than one export can read."
@@ -437,6 +413,13 @@ def create_app(
             raise ApiError(
                 502, "notion_unavailable", "Could not reach Notion."
             ) from None
+
+    def notion_read(read: Callable[[NotionClient], T]) -> T:
+        return with_notion_token(lambda token: read(notion_client(token)))
+
+    @app.get("/notion/pages")
+    def notion_pages(_who: str = Depends(session)) -> Dict[str, Any]:
+        return {"pages": with_notion_token(list_pages)}
 
     def export_id(raw: str) -> str:
         try:
@@ -499,7 +482,7 @@ def create_app(
                     "One of the links is not a Notion page.",
                 ) from None
             previous = {p["id"]: p["title"] for p in store.pages()}
-            token = store.get_secret(st.KEY_NOTION)
+            token = stored_notion_token()
             store.put(
                 st.KEY_PAGES, json.dumps(_page_titles(token, ids, previous))
             )

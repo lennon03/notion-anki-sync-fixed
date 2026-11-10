@@ -56,7 +56,9 @@ async function proxy(request: Request, parts: string[]) {
   } catch {
     return workerUnavailable();
   }
-  const payload = await upstream.json();
+  // While the host wakes the worker its answer is an error page, not JSON
+  const payload = await upstream.json().catch(() => null);
+  if (payload === null) return workerUnavailable();
   // The browser follows backup links straight to the worker: a function
   // here can't stream a whole collection.
   if (upstream.ok && typeof payload?.path === "string") {

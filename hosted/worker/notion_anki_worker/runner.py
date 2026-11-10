@@ -19,6 +19,27 @@ SCHEDULE_TICK_SECONDS = 30
 BLOCKING_STATUSES = (st.FULL_SYNC_NEEDED, st.AUTH_FAILED)
 
 
+def renew_notion_sign_in(
+    store: st.Store, oauth: Optional[NotionOAuth]
+) -> Optional[str]:
+    """Trade the stored refresh token for a new sign-in and store it.
+
+    Returns the new access token, or None when there is nothing to renew
+    with or Notion refuses.
+    """
+    refresh = store.get_secret(st.KEY_NOTION_REFRESH)
+    if oauth is None or not refresh:
+        return None
+    try:
+        tokens = oauth.refresh(refresh)
+    except OAuthError:
+        log.warning("Refreshing the Notion sign-in failed")
+        return None
+    store.put_secret(st.KEY_NOTION, tokens.access)
+    store.put_secret(st.KEY_NOTION_REFRESH, tokens.refresh or refresh)
+    return tokens.access
+
+
 class NotReady(Exception):
     """Something the run needs was never set up, or can't be read."""
 
@@ -95,20 +116,9 @@ class Runner:
 
     def _current_notion_token(self, token: str) -> str:
         """Refresh a Notion sign-in that has stopped working."""
-        store = self._store
-        refresh = store.get_secret(st.KEY_NOTION_REFRESH)
-        if self._oauth is None or not refresh:
+        if self._oauth is None or self._oauth.token_works(token):
             return token
-        if self._oauth.token_works(token):
-            return token
-        try:
-            tokens = self._oauth.refresh(refresh)
-        except OAuthError:
-            log.warning("Refreshing the Notion sign-in failed")
-            return token
-        store.put_secret(st.KEY_NOTION, tokens.access)
-        store.put_secret(st.KEY_NOTION_REFRESH, tokens.refresh or refresh)
-        return tokens.access
+        return renew_notion_sign_in(self._store, self._oauth) or token
 
     def _execute(self, run_id: int, request: pipeline.RunRequest) -> None:
         store = self._store

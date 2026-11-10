@@ -23,7 +23,8 @@ export async function POST(request: Request) {
   } catch {
     return workerUnavailable();
   }
-  const payload = await upstream.json();
+  const payload = await upstream.json().catch(() => null);
+  if (payload === null) return workerUnavailable();
   if (!upstream.ok) {
     return NextResponse.json(payload, { status: upstream.status });
   }

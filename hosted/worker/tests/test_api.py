@@ -148,9 +148,7 @@ class Harness:
             run_once=self._run,
             start_scheduler=False,
             oauth=self.oauth,
-            list_pages=lambda token: [
-                {"id": PAGE, "title": "From Notion", "parent": ""}
-            ],
+            list_pages=lambda token: self.page_list(token),
             notion_client=lambda token: FakeReader(token, self.notion_calls),
         )
         self.client = TestClient(self.app)
@@ -160,6 +158,9 @@ class Harness:
             headers=SITE,
         ).json()["token"]
         self.headers = {**SITE, "X-Session-Token": token}
+
+    def page_list(self, _token):
+        return [{"id": PAGE, "title": "From Notion", "parent": ""}]
 
     def _login(self, username, password, _scratch):
         self.logins.append(username)
@@ -629,6 +630,31 @@ def test_page_list_needs_notion_and_returns_pages(h):
     h.connect()
     pages = h.client.get("/notion/pages", headers=h.headers).json()["pages"]
     assert pages[0]["title"] == "From Notion"
+
+
+def test_page_list_renews_a_rejected_sign_in_once(h):
+    _finish(h, _state(h))
+    seen = []
+
+    def listing(token):
+        seen.append(token)
+        if token != OAUTH_TOKEN + "2":
+            raise NotionError("rejected", 401)
+        return [{"id": PAGE, "title": "After renewal", "parent": ""}]
+
+    h.page_list = listing
+    response = h.client.get("/notion/pages", headers=h.headers)
+    assert response.json()["pages"][0]["title"] == "After renewal"
+    assert h.oauth.refreshes == 1 and len(seen) == 2
+
+
+def test_config_survives_a_token_that_cannot_be_decrypted(h):
+    h.connect()
+    h.app.state.store.put("notion_token", "v1:not:valid")
+    response = h.client.put(
+        "/config", json={"pages": [PAGE]}, headers=h.headers
+    )
+    assert response.status_code == 200
 
 
 def test_page_list_leaves_out_table_rows(monkeypatch):

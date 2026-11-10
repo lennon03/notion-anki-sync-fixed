@@ -93,7 +93,7 @@ in a common case, **low** = edge case or robustness.
   `pagecards.py`).
 - [x] **S6 `_get_or_create_model` and `_get_or_create_cloze_model` differ by
   a field list and a template.**
-- [ ] **S7 Renewing the Notion sign-in is written twice** (`api.renewed_token`,
+- [x] **S7 Renewing the Notion sign-in is written twice** (`api.renewed_token`,
   `Runner._current_notion_token`).
 - [ ] **S8 `sync.py` is 2,800 lines and five things**: the cache file, the
   note type registry, reading Notion, choosing a card's kind, writing the
@@ -103,10 +103,10 @@ in a common case, **low** = edge case or robustness.
 
 ## Worker
 
-- [ ] **W1 (medium) `GET /notion/pages` and the title lookup of `PUT /config`
+- [x] **W1 (medium) `GET /notion/pages` and the title lookup of `PUT /config`
   do not renew an expired Notion sign-in.** The export routes do; the page
   picker answers "Notion rejected this token" while a refresh token is stored.
-- [ ] **W2 (low) `PUT /config` answers 500 when the stored token can't be
+- [x] **W2 (low) `PUT /config` answers 500 when the stored token can't be
   decrypted.**
 - [ ] **W3 (low) `POST`/`DELETE /connect` check that no run is active and then
   delete the local collection**; a scheduled run can start in between.
@@ -128,7 +128,7 @@ in a common case, **low** = edge case or robustness.
 
 ## Site
 
-- [ ] **B1 (medium) The proxy and sign-in routes parse the worker's answer
+- [x] **B1 (medium) The proxy and sign-in routes parse the worker's answer
   with an unguarded `upstream.json()`.** While Railway wakes the worker the
   answer is an HTML error page, and the browser gets a 500 instead of "the
   sync worker can't be reached".
