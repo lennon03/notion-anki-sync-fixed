@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
 import re
+import tempfile
+import time
 from types import SimpleNamespace
 from typing import Any, Dict, List, cast
 
@@ -558,9 +560,7 @@ def _row(row_id, title, edited):
 @pytest.fixture
 def frozen_now(monkeypatch):
     """Pin the sync's clock an hour after EDITED (cache entries stay fresh)."""
-    import notion_sync_addon.sync as sync_mod
-
-    monkeypatch.setattr(sync_mod.time, "time", lambda: EDITED_TS + 3600)
+    monkeypatch.setattr(time, "time", lambda: EDITED_TS + 3600)
     return EDITED_TS + 3600
 
 
@@ -675,11 +675,11 @@ def test_unchanged_page_reuses_table_list_and_data_source(
                 }
             ]
 
-    import notion_sync_addon.sync as sync_mod
+    import notion_sync_addon.fetch as fetch_mod
 
     page_id = "1f2e3d4c5b6a79881726354433221100"
-    monkeypatch.setattr(sync_mod, "NotionClient", lambda token: Client())
-    monkeypatch.setattr(sync_mod, "BlockTree", lambda client: Tree())
+    monkeypatch.setattr(fetch_mod, "NotionClient", lambda token: Client())
+    monkeypatch.setattr(fetch_mod, "BlockTree", lambda client: Tree())
     cfg = {"notion_token": "t", "notion_pages": [page_id]}
     first = fetch_pages(cfg)
     assert calls == ["page", "blocks", "database", "query:ds-1"]
@@ -795,10 +795,11 @@ def test_invalid_json_is_a_notion_error(monkeypatch):
 
 
 def test_fetch_cleans_temp_dir_on_unexpected_error(monkeypatch):
+    import notion_sync_addon.fetch as fetch_mod
     import notion_sync_addon.sync as sync_mod
 
     made = []
-    real_mkdtemp = sync_mod.tempfile.mkdtemp
+    real_mkdtemp = tempfile.mkdtemp
 
     def mkdtemp(**kw):
         made.append(real_mkdtemp(**kw))
@@ -811,8 +812,8 @@ def test_fetch_cleans_temp_dir_on_unexpected_error(monkeypatch):
         def get_page(self, page_id):
             raise ValueError("not a NotionError")
 
-    monkeypatch.setattr(sync_mod.tempfile, "mkdtemp", mkdtemp)
-    monkeypatch.setattr(sync_mod, "NotionClient", Boom)
+    monkeypatch.setattr(tempfile, "mkdtemp", mkdtemp)
+    monkeypatch.setattr(fetch_mod, "NotionClient", Boom)
     with pytest.raises(ValueError):
         sync_mod.fetch_pages({"notion_token": "t", "notion_pages": ["a" * 32]})
     assert made and not os.path.exists(made[0])
@@ -1015,6 +1016,7 @@ def env(tmp_path, monkeypatch):
     """A temp collection, a fake Notion with two pages / three tables, and
     ``env.sync()`` running prepare -> fetch -> apply like the add-on does."""
     collection = pytest.importorskip("anki.collection")
+    import notion_sync_addon.fetch as fetch_mod
     import notion_sync_addon.sync as sync_mod
 
     notion = FakeNotion()
@@ -1040,8 +1042,8 @@ def env(tmp_path, monkeypatch):
             for i in range(2)
         },
     }
-    monkeypatch.setattr(sync_mod, "NotionClient", notion)
-    monkeypatch.setattr(sync_mod, "BlockTree", lambda client: client)
+    monkeypatch.setattr(fetch_mod, "NotionClient", notion)
+    monkeypatch.setattr(fetch_mod, "BlockTree", lambda client: client)
     col = collection.Collection(str(tmp_path / "col.anki2"))
     path = str(tmp_path / "user_files" / "cache.json")
 
@@ -1305,8 +1307,8 @@ def test_synced_block_copies_are_rechecked_hourly(env, monkeypatch):
     assert (
         env.notion.downloads == []
     )  # a no-op right after: nothing downloaded
-    real = env.sync_mod.time.time
-    monkeypatch.setattr(env.sync_mod.time, "time", lambda: real() + 3601)
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 3601)
     env.sync()
     assert env.notion.downloads == [_rid(0)]
 
@@ -1779,8 +1781,8 @@ def test_rows_with_mentions_are_rechecked_hourly_not_every_sync(
     assert not state[_rid(2)].volatile
     env.notion.downloads.clear()
     assert env.sync()["unchanged"] == 8 and env.notion.downloads == []
-    real = env.sync_mod.time.time
-    monkeypatch.setattr(env.sync_mod.time, "time", lambda: real() + 3601)
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + 3601)
     env.sync()
     assert sorted(env.notion.downloads) == [_rid(0), _rid(1)]
 
@@ -1865,8 +1867,8 @@ def test_cache_write_failure_is_only_a_warning(env, monkeypatch):
         calls.append(dst)
         raise PermissionError(13, "Access is denied")
 
-    monkeypatch.setattr(env.sync_mod.time, "sleep", lambda s: None)
-    monkeypatch.setattr(env.sync_mod.os, "replace", deny)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    monkeypatch.setattr(os, "replace", deny)
     stats = env.sync()
     assert stats["added"] == 8 and env.count() == 8 and len(calls) == 2
     assert any("cache" in w for w in env.result.warnings)
@@ -1885,8 +1887,8 @@ def test_cache_write_is_retried_once(env, monkeypatch):
             raise PermissionError(13, "Access is denied")
         return real(src, dst)
 
-    monkeypatch.setattr(env.sync_mod.time, "sleep", lambda s: None)
-    monkeypatch.setattr(env.sync_mod.os, "replace", flaky)
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    monkeypatch.setattr(os, "replace", flaky)
     env.sync()
     assert len(calls) == 2 and not env.result.warnings
     assert os.path.exists(env.path)

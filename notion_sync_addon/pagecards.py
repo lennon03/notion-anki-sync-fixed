@@ -11,7 +11,7 @@ A page that is not a table can hold cards written as text:
 * ``front :: back`` on one line.
 * a paragraph, list item, quote or callout holding ``{{c1::cloze}}``.
 
-Toggles are not read. This module only finds the cards; sync.py renders
+Toggles are not read. This module only finds the cards; fetch.py renders
 them. It is standalone (no Anki imports) so it can be unit tested.
 """
 

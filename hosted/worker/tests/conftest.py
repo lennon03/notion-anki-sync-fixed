@@ -17,6 +17,7 @@ from notion_anki_worker import crypto  # noqa: E402
 from notion_anki_worker.config import Settings  # noqa: E402
 from notion_anki_worker.pipeline import Paths, RunRequest  # noqa: E402
 
+from notion_sync_addon import fetch as addon_fetch  # noqa: E402
 from notion_sync_addon import sync as addon_sync  # noqa: E402
 from tests.test_htmlify_and_sync import (  # noqa: E402
     DB1,
@@ -155,8 +156,10 @@ def notion(monkeypatch):
             for i in range(2)
         },
     }
+    # the pipeline's page search uses sync's name, fetch_pages fetch's
     monkeypatch.setattr(addon_sync, "NotionClient", fake)
-    monkeypatch.setattr(addon_sync, "BlockTree", lambda client: client)
+    monkeypatch.setattr(addon_fetch, "NotionClient", fake)
+    monkeypatch.setattr(addon_fetch, "BlockTree", lambda client: client)
     return fake
 
 

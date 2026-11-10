@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import shutil
 import threading
 import time
@@ -274,6 +275,27 @@ def title_rich_text(obj: dict) -> List[dict]:
 def page_title(obj: dict) -> str:
     """Extract the plain-text title from a page object."""
     return plain_text(title_rich_text(obj)).strip()
+
+
+def canonical_page_id(raw: str) -> str:
+    """Turn a Notion URL or dashed/undashed id into the plain 32-hex id."""
+    raw = raw.strip()
+    bare = raw.replace("-", "")
+    if re.fullmatch(r"[0-9a-fA-F]{32}", bare):
+        return bare.lower()
+    # a link: the id follows the title words (.../Philo-Histoire-<32hex>)
+    match = re.search(
+        r"(?i)([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{32})",
+        raw,
+    )
+    if match:
+        return match.group(1).replace("-", "").lower()
+    raise NotionError(f"Cannot parse page id: {raw}")
+
+
+def bare_id(notion_id: str) -> str:
+    """Return a Notion id without dashes, in lowercase."""
+    return str(notion_id or "").replace("-", "").lower()
 
 
 class BlockSource(Protocol):

@@ -98,11 +98,22 @@ in a common case, **low** = edge case or robustness.
   a field list and a template.**
 - [x] **S7 Renewing the Notion sign-in is written twice** (`api.renewed_token`,
   `Runner._current_notion_token`).
-- [ ] **S8 `sync.py` is 2,800 lines and five things**: the cache file, the
+- [x] **S8 `sync.py` is 2,800 lines and five things**: the cache file, the
   note type registry, reading Notion, choosing a card's kind, writing the
   collection. Splitting it along those lines changes no behaviour and makes
   each part testable alone. `_render_blocks` returns a five-value tuple that
   wants to be a small dataclass.
+  *Done:* split into `cache.py` (cache file and freshness), `note_types.py`
+  (note type registry, note type creation, synced notes), `rows.py` (the
+  row, table and page data, `SyncResult`, columns and Card type options),
+  `fetch.py` (reading Notion), `media.py` (download, staging, import) and
+  `apply.py` (writing the collection). Every function moved unchanged.
+  `sync.py` keeps phase 0 (`prepare_sync`) and re-exports the names the
+  add-on, the worker and the tests use. Tests that replaced `NotionClient`
+  or `BlockTree` on `sync` now replace them on `fetch`. *Remaining:*
+  choosing a card's kind (`_render_blocks`, `split_hint`,
+  `_page_card_type`) still lives in `fetch.py`, and `_render_blocks` still
+  returns a five-value tuple.
 
 ## Worker
 
