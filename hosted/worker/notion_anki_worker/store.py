@@ -25,6 +25,7 @@ KEY_SCHEDULE = "schedule_minutes"
 
 MAX_RUNS = 50
 MAX_LOG_LINES = 500
+LOG_HEAD_LINES = 100  # a long log keeps its start and its end
 
 RUNNING = "running"
 OK = "ok"
@@ -52,6 +53,25 @@ create table if not exists runs (
     backup text
 );
 """
+
+
+def _shorten_log(lines: List[Dict[str, Any]]) -> None:
+    """Keep a log at ``MAX_LOG_LINES``: its start, a marker, its end.
+
+    The marker stands for every line left out so far.
+    """
+    excess = len(lines) - MAX_LOG_LINES
+    if excess <= 0:
+        return
+    at = LOG_HEAD_LINES
+    # the line at ``at`` is the marker, or becomes it
+    left_out = lines[at].get("left_out", 1) + excess
+    del lines[at + 1 : at + 1 + excess]
+    lines[at] = {
+        "at": lines[at]["at"],
+        "text": f"... {left_out} lines left out ...",
+        "left_out": left_out,
+    }
 
 
 class Store:
@@ -164,9 +184,8 @@ class Store:
             if row is None:
                 return
             lines = json.loads(row["log"])
-            if len(lines) >= MAX_LOG_LINES:
-                return
             lines.append({"at": time.time(), "text": scrub(line)})
+            _shorten_log(lines)
             db.execute(
                 "update runs set log=? where id=?",
                 (json.dumps(lines), run_id),

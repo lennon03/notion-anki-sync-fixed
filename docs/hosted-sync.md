@@ -78,7 +78,7 @@ them.
 | --- | --- | --- |
 | `ankiweb_hkey`, `notion_token`, `notion_refresh_token` | `settings` table | AES-256-GCM, the key name is authenticated too |
 | AnkiWeb endpoint, pages, schedule | `settings` table | not secret |
-| Run history (status, stats, warnings, log) | `runs` table | newest 50, scrubbed of secrets |
+| Run history (status, stats, warnings, log) | `runs` table | newest 50, scrubbed of secrets; a log over 500 lines keeps its start and end |
 | Row cache | `cache/notion-cache.json` | no secrets, written after a good push only |
 | Backups | `backups/before-*.colpkg` | card content, no credentials |
 | Collection and media | `profile/` | card content, no credentials; see above |

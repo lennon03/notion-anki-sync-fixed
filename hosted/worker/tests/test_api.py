@@ -12,7 +12,14 @@ from notion_anki_worker.config import ConfigError, Settings
 from notion_anki_worker.pipeline import RunOutcome
 from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import ScrubbingFormatter, register, scrub
-from notion_anki_worker.store import FULL_SYNC_NEEDED, KEY_SCHEDULE, OK
+from notion_anki_worker.store import (
+    FULL_SYNC_NEEDED,
+    KEY_SCHEDULE,
+    LOG_HEAD_LINES,
+    MAX_LOG_LINES,
+    OK,
+    Store,
+)
 
 from notion_sync_addon.notion_api import NotionError
 
@@ -492,6 +499,20 @@ def test_backup_link_downloads_and_expires(h):
 def test_backup_routes_only_serve_backups(h, name):
     response = h.client.post(f"/backups/{name}/link", headers=h.headers)
     assert response.status_code in (404, 422)
+
+
+def test_a_long_log_keeps_its_start_and_its_end(tmp_path):
+    store = Store(tmp_path / "s.sqlite3", crypto.Vault(bytes(32)))
+    run_id = store.start_run("manual")
+    total = MAX_LOG_LINES + 250
+    for n in range(total):
+        store.append_log(run_id, f"line {n}")
+    log = [line["text"] for line in store.latest_run()["log"]]
+    assert len(log) == MAX_LOG_LINES
+    assert log[0] == "line 0" and log[-1] == f"line {total - 1}"
+    kept = MAX_LOG_LINES - 1
+    assert f"{total - kept} lines left out" in log[LOG_HEAD_LINES]
+    assert log[LOG_HEAD_LINES + 1] == f"line {total - kept + LOG_HEAD_LINES}"
 
 
 def test_scrubber_removes_known_and_token_shaped_secrets():

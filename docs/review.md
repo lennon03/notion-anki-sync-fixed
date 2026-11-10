@@ -141,8 +141,10 @@ in a common case, **low** = edge case or robustness.
   options**; `sync_column`, `page_cards` and the others can't be set.
 - [ ] **W9 (low) `table_rows` reads every row before refusing a table with
   more than 1,000.**
-- [ ] **W10 (low) A run's log stops silently at 500 lines**, losing the
+- [x] **W10 (low) A run's log stops silently at 500 lines**, losing the
   closing `Timings` line.
+  *Done:* a long log keeps its first 100 lines and its latest ones, with one
+  "N lines left out" line between them.
 
 ## Site
 
