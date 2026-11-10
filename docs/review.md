@@ -142,6 +142,9 @@ in a common case, **low** = edge case or robustness.
   match once and Notion is read in full once.
 - [ ] **W6 (improvement) The whole collection is exported as a backup on every
   full read**, at least hourly, and thrown away when nothing changed.
+  *Left open:* whether a run changes anything is only known after
+  `apply_sync`, and by then the state before it is gone, so skipping the
+  export would break "a backup exists whenever a run changed something".
 - [x] **W7 (low) The scheduler logs a traceback every 30 seconds** when a
   stored secret can't be decrypted (`NotReady` raised from `tick`).
   *Done:* `tick` skips the run quietly; the start-up log already says once
@@ -154,6 +157,9 @@ in a common case, **low** = edge case or robustness.
   done: a form on the site (set them through the API for now).
 - [ ] **W9 (low) `table_rows` reads every row before refusing a table with
   more than 1,000.**
+  *Left open:* the client's only public query, `query_data_source`, reads
+  every page of results. Stopping early needs a core change, such as a
+  `limit` argument there.
 - [x] **W10 (low) A run's log stops silently at 500 lines**, losing the
   closing `Timings` line.
   *Done:* a long log keeps its first 100 lines and its latest ones, with one
