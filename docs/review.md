@@ -87,11 +87,11 @@ in a common case, **low** = edge case or robustness.
   `text.content`, not `plain_text`).
 - [x] **S3 The worker calls the client's private `_request` for `/search` and
   `/users/me`** in three places. Two public methods remove that.
-- [ ] **S4 `_apply_card_style` and `_apply_note_types` in `__init__.py` are
+- [x] **S4 `_apply_card_style` and `_apply_note_types` in `__init__.py` are
   the same forty lines twice.**
 - [x] **S5 The cloze and Source regular expressions exist twice** (`sync.py`,
   `pagecards.py`).
-- [ ] **S6 `_get_or_create_model` and `_get_or_create_cloze_model` differ by
+- [x] **S6 `_get_or_create_model` and `_get_or_create_cloze_model` differ by
   a field list and a template.**
 - [ ] **S7 Renewing the Notion sign-in is written twice** (`api.renewed_token`,
   `Runner._current_notion_token`).

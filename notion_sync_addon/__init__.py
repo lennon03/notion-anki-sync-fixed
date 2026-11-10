@@ -588,88 +588,71 @@ def _own_model_ids(col: Any) -> list:
     return list(sync.own_model_ids(col).values())
 
 
-def _apply_card_style(preset: str) -> None:
-    """Write the preset to our note types in the background (one undo step).
+def _run_collection_op(
+    op: Callable[[Any], bool], done_message: str, failure: str
+) -> None:
+    """Run a small collection change in the background, like a sync.
 
-    Runs like a sync: never next to one (their undo steps would mix; a
-    preset picked during a sync is applied right after it), and Anki
-    waits for it before closing the collection.
+    Never next to one (their undo steps would mix): the callers queue
+    their change while a sync runs. Anki waits for it before closing the
+    collection. ``op`` returns whether it changed anything.
+    """
+    _state["generation"] += 1
+    generation = _state["generation"]
+    _state["busy"] = True
+
+    def done(changed: bool) -> None:
+        try:
+            _finish(generation)
+            if changed and mw.col is not None:
+                _op_finished(_no_changes())
+                tooltip(done_message)
+        finally:
+            _release_collection()
+
+    def failed(exc: Exception) -> None:
+        try:
+            _finish(generation)
+            if not _state["closing"]:
+                showWarning(f"Notion Sync: {failure}:\n{exc}")
+        finally:
+            _release_collection()
+
+    _hold_collection()
+    QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
+
+
+def _apply_card_style(preset: str) -> None:
+    """Write the preset to our note types (one undo step).
+
+    A preset picked during a sync is applied right after it.
     """
     if mw.col is None or styles.css_for(preset) is None:
         return
     if _state["busy"]:
         _state["pending_style"] = preset
         return
-    _state["generation"] += 1
-    generation = _state["generation"]
-    _state["busy"] = True
-
-    def op(col: Any) -> bool:
-        return styles.apply_preset(col, preset, _own_model_ids(col))
-
-    def done(changed: bool) -> None:
-        try:
-            _finish(generation)
-            if changed and mw.col is not None:
-                _op_finished(_no_changes())
-                tooltip("Card style applied")
-        finally:
-            _release_collection()
-
-    def failed(exc: Exception) -> None:
-        try:
-            _finish(generation)
-            if not _state["closing"]:
-                showWarning(
-                    f"Notion Sync: could not apply the card style:\n{exc}"
-                )
-        finally:
-            _release_collection()
-
-    _hold_collection()
-    QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
+    _run_collection_op(
+        lambda col: styles.apply_preset(col, preset, _own_model_ids(col)),
+        "Card style applied",
+        "could not apply the card style",
+    )
 
 
 def _apply_note_types(changes: Dict[str, int]) -> None:
-    """Store the note types chosen for tables, in the background.
-
-    Runs like a card style change: never next to a sync (a choice made
-    during one is stored right after it), guarded against the collection
-    closing, and one undo step only when the choice changed.
+    """Store the note types chosen for tables (one undo step, only when
+    the choice changed). A choice made during a sync is stored after it.
     """
     if mw.col is None or not changes:
         return
     if _state["busy"]:
         _state["pending_types"].update(changes)
         return
-    _state["generation"] += 1
-    generation = _state["generation"]
-    _state["busy"] = True
-
-    def op(col: Any) -> bool:
-        return sync.set_table_note_types(col, changes)
-
-    def done(changed: bool) -> None:
-        try:
-            _finish(generation)
-            if changed and mw.col is not None:
-                _op_finished(_no_changes())
-                tooltip("Note types saved; new rows use them")
-        finally:
-            _release_collection()
-
-    def failed(exc: Exception) -> None:
-        try:
-            _finish(generation)
-            if not _state["closing"]:
-                showWarning(
-                    f"Notion Sync: could not save the note types:\n{exc}"
-                )
-        finally:
-            _release_collection()
-
-    _hold_collection()
-    QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
+    _run_collection_op(
+        lambda col: sync.set_table_note_types(col, changes),
+        "Note types saved; new rows use them",
+        "could not save the note types",
+    )
 
 
 def _web_preview(parent: Any, document: str, _dark: bool) -> None:

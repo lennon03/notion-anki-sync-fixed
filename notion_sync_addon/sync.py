@@ -1958,6 +1958,22 @@ def card_css(cfg: Optional[dict]) -> str:
     return css_for(preset) or MODEL_CSS
 
 
+def _create_model(
+    col, name: str, fields: Tuple[str, ...], template: dict, css: str
+) -> dict:
+    """Add a note type with these fields and one card template."""
+    model = col.models.new(name)
+    if "{{cloze:" in template["qfmt"]:
+        model["type"] = 1  # anki.models.MODEL_CLOZE
+    for fname in fields:
+        col.models.add_field(model, col.models.new_field(fname))
+    col.models.add_template(model, {"ord": 0, **template})
+    model["css"] = css
+    col.models.add_dict(model)
+    refreshed = col.models.by_name(name)
+    return refreshed if refreshed is not None else model
+
+
 def _get_or_create_model(
     col,
     before_change: Callable[[], None] = _no_change,
@@ -1971,25 +1987,18 @@ def _get_or_create_model(
     model = find_model(col)
     if model is not None:
         return model
-
     before_change()
-    model = col.models.new(MODEL_NAME)
-    fieldnames = ("Front", "Back", "Source")
-    existing = {f["name"] for f in model["flds"]}
-    for fname in fieldnames:
-        if fname not in existing:
-            col.models.add_field(model, col.models.new_field(fname))
-    template = {
-        "name": "Notion Sync Card",
-        "ord": 0,
-        "qfmt": "{{Front}}",
-        "afmt": "{{Front}}<hr id=answer>{{Back}}",
-    }
-    col.models.add_template(model, template)
-    model["css"] = css
-    col.models.add_dict(model)
-    refreshed = col.models.by_name(MODEL_NAME)
-    return refreshed if refreshed is not None else model
+    return _create_model(
+        col,
+        MODEL_NAME,
+        ("Front", "Back", "Source"),
+        {
+            "name": "Notion Sync Card",
+            "qfmt": "{{Front}}",
+            "afmt": "{{Front}}<hr id=answer>{{Back}}",
+        },
+        css,
+    )
 
 
 CLOZE_FRONT_STYLE = (
@@ -2011,29 +2020,20 @@ def _get_or_create_cloze_model(
     model = find_model(col, "cloze")
     if model is not None:
         return model
-
     before_change()
-    model = col.models.new(CLOZE_MODEL_NAME)
-    model["type"] = 1  # anki.models.MODEL_CLOZE
-    existing = {f["name"] for f in model["flds"]}
-    for fname in ("Text", "Back Extra", "Source"):
-        if fname not in existing:
-            col.models.add_field(model, col.models.new_field(fname))
-    col.models.add_template(
-        model,
+    return _create_model(
+        col,
+        CLOZE_MODEL_NAME,
+        ("Text", "Back Extra", "Source"),
         {
             "name": "Cloze",
-            "ord": 0,
             "qfmt": '<div class="ns-q">{{cloze:Text}}</div>'
             + CLOZE_FRONT_STYLE,
             "afmt": '<div class="ns-a">{{cloze:Text}}</div>'
             "{{#Back Extra}}<hr id=answer>{{Back Extra}}{{/Back Extra}}",
         },
+        css,
     )
-    model["css"] = css
-    col.models.add_dict(model)
-    refreshed = col.models.by_name(CLOZE_MODEL_NAME)
-    return refreshed if refreshed is not None else model
 
 
 def _guard_cloze(line: str) -> str:
