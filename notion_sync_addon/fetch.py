@@ -12,8 +12,9 @@ import os
 import re
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from .cache import Cache, RowState, _fresh, is_unchanged
 from .htmlify import (
@@ -49,6 +50,7 @@ from .rows import (
     PageData,
     Progress,
     RowCard,
+    RowColumns,
     SyncResult,
     TableData,
     _fail,
@@ -64,6 +66,9 @@ MAX_ORIGIN_CHECKS = 25
 # A row that was asked about is asked again after this long, so rows that
 # keep failing don't starve the ones not yet asked.
 ORIGIN_RECHECK_SECONDS = 24 * 3600
+# Rows of a table are downloaded this many at a time (Notion allows about
+# three requests a second; the client retries a 429 after its delay).
+ROW_WORKERS = 3
 
 
 def resolve_token(cfg: Optional[dict]) -> str:
@@ -408,23 +413,24 @@ def _render_page_card(
     """Render a found card; None if nothing is left of it."""
     title_rts = tree.strip_rich(card.title)
     title = rt_text(title_rts).strip()
+    front = title_html(title_rts, title)
     if card.origin == "cloze":
-        front = rich_text_to_html(title_rts).strip()
         if not has_cloze(title):
             return None
-        return RowCard(card.source_id, front, "", url=url, kind="cloze")
+        return RowCard(
+            card.source_id, front, "", url=url, kind="cloze", title=title
+        )
     if not title:
         return None
     answer = tree.strip_blocks(card.blocks)
     done = _render_blocks(
-        answer, title, _page_card_type(card, answer), media, tree, result
+        answer,
+        title,
+        _page_card_type(card, answer),
+        media,
+        tree,
+        result.warnings,
     )
-    if done.kind == "cloze" and has_cloze(title):
-        front = rich_text_to_html(title_rts).strip()
-    elif done.kind == "basic":
-        front = html.escape(title, quote=False)
-    else:
-        front = title
     return RowCard(
         card.source_id,
         front,
@@ -434,6 +440,7 @@ def _render_page_card(
         kind=done.kind,
         lines=done.lines,
         overlap=done.overlap,
+        title=title,
     )
 
 
@@ -519,7 +526,11 @@ def _is_volatile(block: dict) -> bool:
 def _resolve_table(
     client: NotionClient, db_id: str, block_title: str
 ) -> Tuple[str, str]:
-    """Look up a database's data source id and title."""
+    """Look up a database's data source ids and title.
+
+    A database can hold several data sources: their ids are joined with
+    commas, so a database with one source is cached as before.
+    """
     db = client.get_database(db_id)
     ds = data_source_of(db) or {}
     title = (
@@ -528,7 +539,20 @@ def _resolve_table(
         or block_title
         or "Table"
     )
-    return ds.get("id") or db_id, title
+    ids = [
+        str(s["id"])
+        for s in db.get("data_sources") or []
+        if isinstance(s, dict) and s.get("id")
+    ]
+    return ",".join(ids) or db_id, title
+
+
+def _query_rows(client: NotionClient, ds_ids: str) -> List[dict]:
+    """List the rows of every data source of a table, in order."""
+    rows: List[dict] = []
+    for ds_id in ds_ids.split(","):
+        rows += client.query_data_source(ds_id)
+    return rows
 
 
 def _fetch_table(
@@ -569,7 +593,7 @@ def _fetch_table(
     try:
         # one cheap metadata query per 100 rows; every row carries its
         # built-in last_edited_time, no table property is needed
-        rows = client.query_data_source(ds_id)
+        rows = _query_rows(client, ds_id)
     except NotionError as e:
         error = e
         retried: Optional[List[dict]] = None
@@ -582,7 +606,7 @@ def _fetch_table(
                 table.title, table.raw_title = deck_safe(title), title
                 if fresh_ds != ds_id:
                     ds_id = fresh_ds
-                    retried = client.query_data_source(ds_id)
+                    retried = _query_rows(client, ds_id)
             except NotionError as again:
                 error = again
         if retried is None:
@@ -598,10 +622,11 @@ def _fetch_table(
     result.dbs_out[db_id] = ds_id
 
     now = time.time()
+    # rows to download wait in ``slots`` so the cards keep the table's order
+    slots: List[Union[RowCard, _RowJob]] = []
     for index, row in enumerate(rows, 1):
         title_rich = title_rich_text(row)
         front = plain_text(title_rich).strip()
-        live_title = _has_live_mention(title_rich)
         if not front and not bool(
             result.config.get("include_empty_cards", True)
         ):
@@ -616,7 +641,7 @@ def _fetch_table(
             # unchecked: no card and no download. Only where the row came
             # from is kept; its content is read when it is checked again
             result.fetched[row_id] = RowState("", 0.0, "", page_id, db_id)
-            table.rows.append(
+            slots.append(
                 RowCard(
                     source_id=row_id,
                     front=front,
@@ -624,6 +649,7 @@ def _fetch_table(
                     url=row.get("url", ""),
                     unchecked=True,
                     columns=columns,
+                    title=front,
                 )
             )
             continue
@@ -633,7 +659,7 @@ def _fetch_table(
             result.fetched[row_id] = replace(
                 cached, page_id=page_id, db_id=db_id
             )
-            table.rows.append(
+            slots.append(
                 RowCard(
                     source_id=row_id,
                     front=front,
@@ -641,53 +667,65 @@ def _fetch_table(
                     url=row.get("url", ""),
                     unchanged=True,
                     columns=columns,
+                    title=front,
                 )
             )
             continue
-        result.progress(f"{title} {index}/{len(rows)}")
-        fetched_at = time.time()
-        recorder = _RecordingTree(tree)
-        struck = StrikeTags(recorder)
-        try:
-            done = _render_row(
-                row["id"], front, columns.card_type, media, struck, result
-            )
-        except NotionError as e:
-            # still listed in Notion: keep its note, retry next sync
-            result.protected.add(row_id)
-            _fail(
-                result,
-                f"Row '{front}' in '{title}': {e}",
+        slots.append(_RowJob(index, row, front, title_rich, columns))
+
+    jobs = [slot for slot in slots if isinstance(slot, _RowJob)]
+    pool = ThreadPoolExecutor(max_workers=ROW_WORKERS)
+    try:
+        # downloaded side by side, used here one by one in listing order
+        downloads = pool.map(lambda job: _download_row(job, tree), jobs)
+        for slot in slots:
+            if isinstance(slot, RowCard):
+                table.rows.append(slot)
+                continue
+            job = slot
+            result.progress(f"{title} {job.index}/{len(rows)}")
+            got = next(downloads)
+            row_id = job.row["id"].replace("-", "")
+            if got.error is not None:
+                # still listed in Notion: keep its note, retry next sync
+                result.protected.add(row_id)
+                _fail(
+                    result,
+                    f"Row '{job.title}' in '{title}': {got.error}",
+                    page_id,
+                    db_id,
+                    f"Row '{job.title}' in '{title}': "
+                    f"{got.error.reason()}",
+                )
+                continue
+            assert got.done is not None
+            media.extend(got.media)
+            result.warnings += got.warnings
+            result.fetched[row_id] = RowState(
+                str(job.row.get("last_edited_time") or ""),
+                got.fetched_at,
+                "",
                 page_id,
                 db_id,
-                f"Row '{front}' in '{title}': {e.reason()}",
+                1 if got.volatile else 0,
             )
-            continue
-        result.fetched[row_id] = RowState(
-            edited,
-            fetched_at,
-            "",
-            page_id,
-            db_id,
-            1 if recorder.volatile or live_title else 0,
-        )
-        if done.kind == "basic" or (done.kind == "cloze" and has_cloze(front)):
-            # the title is the field itself: Anki reads fields as HTML
-            front = html.escape(front, quote=False)
-        table.rows.append(
-            RowCard(
-                source_id=row_id,
-                front=front,
-                back_html=done.back,
-                context_html=done.hint,
-                url=row.get("url", ""),
-                tags=[TAG_PREFIX + t for t in clean_tags(struck.tags)],
-                columns=columns,
-                kind=done.kind,
-                lines=done.lines,
-                overlap=done.overlap,
+            table.rows.append(
+                RowCard(
+                    source_id=row_id,
+                    front=title_html(job.title_rich, job.title),
+                    back_html=got.done.back,
+                    context_html=got.done.hint,
+                    url=job.row.get("url", ""),
+                    tags=got.tags,
+                    columns=job.columns,
+                    kind=got.done.kind,
+                    lines=got.done.lines,
+                    overlap=got.done.overlap,
+                    title=job.title,
+                )
             )
-        )
+    finally:
+        pool.shutdown(cancel_futures=True)
     return table
 
 
@@ -719,6 +757,69 @@ def split_hint(blocks: List[dict]) -> Tuple[List[dict], List[dict]]:
 
 
 @dataclass
+class _RowJob:
+    """A listed row whose page has to be downloaded."""
+
+    index: int  # position in the table listing, from 1
+    row: dict  # the row as the listing gave it
+    title: str  # plain title
+    title_rich: List[dict]
+    columns: RowColumns
+
+
+@dataclass
+class _Downloaded:
+    """What downloading one row gave: a card, or the error."""
+
+    done: Optional["Rendered"] = None
+    error: Optional[NotionError] = None
+    media: MediaCollector = field(default_factory=MediaCollector)
+    warnings: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
+    volatile: bool = False
+    fetched_at: float = 0.0
+
+
+def _download_row(job: _RowJob, tree: BlockSource) -> _Downloaded:
+    """Download and render one row; runs in a worker thread.
+
+    Everything it finds goes into its own ``_Downloaded``: the caller adds
+    it to the sync's result on its own thread, in listing order.
+    """
+    got = _Downloaded(fetched_at=time.time())
+    recorder = _RecordingTree(tree)
+    struck = StrikeTags(recorder)
+    try:
+        got.done = _render_row(
+            job.row["id"],
+            job.title,
+            job.columns.card_type,
+            got.media,
+            struck,
+            got.warnings,
+        )
+    except NotionError as e:
+        got.error = e
+        return got
+    got.tags = [TAG_PREFIX + t for t in clean_tags(struck.tags)]
+    got.volatile = recorder.volatile or _has_live_mention(job.title_rich)
+    return got
+
+
+def title_html(rich: List[dict], plain: str) -> str:
+    """Render a row's or page card's title as its Front field.
+
+    Bold, inline code and inline equations are kept. A cloze marker that
+    formatting cuts in two would no longer be a cloze: such a title is
+    written as plain text instead.
+    """
+    out = rich_text_to_html(rich).strip()
+    if has_cloze(plain) and not has_cloze(out):
+        return html.escape(plain, quote=False)
+    return out
+
+
+@dataclass
 class Rendered:
     """A rendered row or page card, before it becomes a ``RowCard``."""
 
@@ -735,7 +836,7 @@ def _render_row(
     card_type: str,
     media: MediaCollector,
     tree: Any,
-    result: SyncResult,
+    warnings: List[str],
 ) -> Rendered:
     """Download and render a row.
 
@@ -743,7 +844,7 @@ def _render_row(
     otherwise a cloze marker in the title or page makes it a cloze.
     """
     return _render_blocks(
-        tree.children(row_id), title, card_type, media, tree, result
+        tree.children(row_id), title, card_type, media, tree, warnings
     )
 
 
@@ -753,7 +854,7 @@ def _render_blocks(
     card_type: str,
     media: MediaCollector,
     tree: Any,
-    result: SyncResult,
+    warnings: List[str],
 ) -> Rendered:
     """Render the blocks of a row or page card (see ``_render_row``)."""
     blocks, hint_blocks = split_hint(all_blocks)
@@ -768,7 +869,7 @@ def _render_blocks(
     if card_type.split(None, 1)[:1] == ["overlapping"]:
         spec = parse_overlap(card_type)
         if spec is None:
-            result.warnings.append(
+            warnings.append(
                 f"Row '{title}': Card type '{card_type}' is not understood "
                 f"(use {OVERLAP_SYNTAX}); used plain Overlapping"
             )
@@ -779,7 +880,7 @@ def _render_blocks(
             return Rendered(
                 "overlapping", "\n".join(lines), hint, lines, options
             )
-        result.warnings.append(
+        warnings.append(
             f"Row '{title}': Card type is Overlapping but the page has no "
             "line; made a basic card"
         )
@@ -790,7 +891,7 @@ def _render_blocks(
     if has_cloze(title) or has_cloze(back):
         return Rendered("cloze", back, hint)
     if card_type == "cloze":
-        result.warnings.append(
+        warnings.append(
             f"Row '{title}': Card type is Cloze but no {{{{c1::...}}}} "
             "was found; made a basic card"
         )

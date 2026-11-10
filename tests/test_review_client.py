@@ -104,7 +104,6 @@ def test_a_short_media_name_is_unchanged_and_a_long_dotted_one_is_cut():
 def test_rendered_blocks_name_their_parts():
     from notion_sync_addon.fetch import Rendered, _render_blocks
     from notion_sync_addon.htmlify import MediaCollector
-    from notion_sync_addon.rows import SyncResult
 
     para = {
         "id": "p",
@@ -116,7 +115,5 @@ def test_rendered_blocks_name_their_parts():
             ]
         },
     }
-    done = _render_blocks(
-        [para], "Q", "", MediaCollector(), None, SyncResult()
-    )
+    done = _render_blocks([para], "Q", "", MediaCollector(), None, [])
     assert done == Rendered("basic", "<p>x</p>", "")

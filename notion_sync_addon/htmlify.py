@@ -46,6 +46,11 @@ class MediaCollector:
         self.order.append(fname)
         return self._placeholder(fname)
 
+    def extend(self, other: "MediaCollector") -> None:
+        """Add the files ``other`` collected, in its order."""
+        for fname in other.order:
+            self.add(other.files[fname], fname)
+
     @staticmethod
     def _placeholder(fname: str) -> str:
         return f"@@NSMEDIA:{fname}@@"

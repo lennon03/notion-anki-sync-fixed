@@ -22,7 +22,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 # folder (kept across add-on upgrades, never sent to AnkiWeb):
 #   rows:  row id -> RowState (see RowState.to_json)
 #   pages: page id -> [last_edited_time, fetched at, [[database id, title]...]]
-#   dbs:   database id -> data source id (looked up again if it stops working)
+#   dbs:   database id -> data source ids, comma-separated (looked up again
+#          if one stops working)
 #   problems: what the last sync could not read, shown in the settings dialog
 # Bump RENDER_VERSION whenever the HTML produced for a row changes so every
 # row is re-rendered once (row origins and the page structure are kept).

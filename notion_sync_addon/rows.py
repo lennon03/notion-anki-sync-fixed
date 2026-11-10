@@ -27,7 +27,7 @@ class RowCard:
     """One Notion row, to become one note."""
 
     source_id: str
-    front: str
+    front: str  # the title as HTML (the Front or Text field)
     back_html: str  # may contain @@NSMEDIA:*@@ placeholders
     url: str
     unchanged: bool = False  # content not fetched: note is already current
@@ -39,6 +39,7 @@ class RowCard:
     kind: str = ""
     lines: List[str] = field(default_factory=list)  # overlapping: its lines
     overlap: Optional["OverlapSpec"] = None  # overlapping: Card type options
+    title: str = ""  # the title as plain text, for messages
 
 
 @dataclass

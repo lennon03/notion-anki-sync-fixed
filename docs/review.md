@@ -69,17 +69,32 @@ in a common case, **low** = edge case or robustness.
 
 ## Core: improvements
 
-- [ ] **I1 Only a database's first data source is read** (`data_source_of`).
+- [x] **I1 Only a database's first data source is read** (`data_source_of`).
   A database with several data sources loses the rows of the others.
-- [ ] **I2 Rows are downloaded one after the other.** The client already keeps
+  *Done:* every data source's rows are read, in order. The cache keeps the
+  ids comma-separated (one id as before). A data source added to a database
+  later is noticed when a cached one stops working or on a Full Resync, as
+  for I4.
+- [x] **I2 Rows are downloaded one after the other.** The client already keeps
   a connection per thread; three workers would make a first sync about three
   times faster within Notion's rate limit.
-- [ ] **I3 A row moved to another table keeps its old deck.**
+  *Done:* a table's rows are downloaded and rendered three at a time, each
+  with its own media list and warnings; the calling thread then adds them to
+  the result in listing order, so cards, media and messages keep their
+  order. Page cards are still read one after the other.
+- [x] **I3 A row moved to another table keeps its old deck.**
+  *Done:* `_move_renamed` also moves a moved row's cards that are still in
+  its old table's deck; cards the user moved elsewhere stay.
 - [ ] **I4 A table's title is taken from the cached page listing**, so a
   renamed table is only noticed when its page's own edit time moves (to verify
   against Notion: whether renaming an inline database moves it).
-- [ ] **I5 Titles lose their formatting**: bold, inline code and inline
+  *Left:* needs a real Notion workspace to verify.
+- [x] **I5 Titles lose their formatting**: bold, inline code and inline
   equations in a row title become plain text.
+  *Done:* the Front (or the title above a cloze's text) is the title's
+  HTML, for rows and page cards. Messages and cloze detection use the plain
+  title; a title whose formatting cuts a cloze marker is written as plain
+  text.
 
 ## Simplifications
 

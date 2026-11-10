@@ -905,6 +905,8 @@ class FakeNotion:
         self.trashed = {}  # row id -> db id: rows moved to Notion's trash
         self.props = {}  # row id -> extra Notion property objects
         self.page_blocks = {}  # page id -> blocks written on the page itself
+        # db id -> row ids listed by a second data source, "ds2-<db>"
+        self.second_source = {}
 
     def __call__(self, token):  # stands in for the NotionClient class
         return self
@@ -967,18 +969,30 @@ class FakeNotion:
             raise NotionError("GET database 503", 503, transient=True)
         if db not in self.tables:
             raise NotionError("object_not_found", 404)
+        sources = [{"id": self._ds_of(db)}]
+        if db in self.second_source:
+            sources.append({"id": "ds2-" + db})
         return {
             "title": [{"plain_text": self.tables[db]["title"]}],
-            "data_sources": [{"id": self._ds_of(db)}],
+            "data_sources": sources,
         }
 
     def query_data_source(self, ds):
         self.calls.append(("query", ds))
         db = next((d for d in self.tables if self._ds_of(d) == ds), None)
-        if db is None:  # deleted or replaced data source
+        second = next(
+            (d for d in self.second_source if "ds2-" + d == ds), None
+        )
+        if db is None and second is None:  # deleted or replaced
             raise NotionError("object_not_found", 404)
-        if ("query", db) in self.fail:
+        if ("query", db or second) in self.fail:
             raise NotionError("query 503", 503, transient=True)
+        if second is not None:
+            db, ids = second, self.second_source[second]
+        else:
+            ids = set(self.tables[db]["rows"]) - set(
+                self.second_source.get(db, ())
+            )
         return [
             {
                 "id": rid,
@@ -987,14 +1001,13 @@ class FakeNotion:
                 "properties": {
                     "Name": {
                         "type": "title",
-                        "title": (
-                            r[3] if len(r) > 3 else [{"plain_text": r[0]}]
-                        ),
+                        "title": (r[3] if len(r) > 3 else _rt(r[0])),
                     },
                     **self.props.get(rid, {}),
                 },
             }
             for rid, r in self.tables[db]["rows"].items()
+            if rid in ids
         ]
 
     def download_file(self, url, path):

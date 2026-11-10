@@ -104,7 +104,7 @@ def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
     """Return a row's [Front/Text, Back/Back Extra], by its kind."""
     title = row.front
     back = MediaCollector.resolve(row.back_html, imported_names)
-    shown = f'<div class="ns-title">{html.escape(title, quote=False)}</div>'
+    shown = f'<div class="ns-title">{title}</div>'
     if row.kind == "overlapping":
         spec = row.overlap or OverlapSpec()
         guarded = [
@@ -126,7 +126,7 @@ def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
             f'{style}{shown}<div class="{wrap}">{"".join(lines)}</div>',
             "",
         ]
-    elif row.kind == "cloze" and has_cloze(title):
+    elif row.kind == "cloze" and has_cloze(row.title or title):
         fields = [title, back]
     elif row.kind == "cloze":
         fields = [shown + back, ""]
@@ -348,7 +348,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                     )
                 if plan is None:  # unusable Source field: stay safe
                     result.warnings.append(
-                        f"Row '{row.front}': its note type has no usable "
+                        f"Row '{row.title}': its note type has no usable "
                         "Source field; skipped"
                     )
                     continue
@@ -376,7 +376,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                         if not soft:
                             raise
                         result.warnings.append(
-                            f"Row '{row.front}': Anki refused the note "
+                            f"Row '{row.title}': Anki refused the note "
                             f"({e}); the row is tried again next sync"
                         )
                         continue
@@ -408,7 +408,7 @@ def _apply(col, result: SyncResult, undo: _UndoStep) -> Dict[str, int]:
                         ):
                             raise
                         result.warnings.append(
-                            f"Row '{row.front}': Anki refused the note "
+                            f"Row '{row.title}': Anki refused the note "
                             f"({e}); the row is tried again next sync"
                         )
                         continue
@@ -543,14 +543,16 @@ def _move_renamed(
     notes: Dict[str, List[SyncedNote]],
     undo: _UndoStep,
 ) -> int:
-    """Move the cards of a renamed (or moved) table to its new deck.
+    """Move the cards of a renamed table, or of a row moved to another
+    table, to the table's deck.
 
-    The cache remembers the deck each table's cards were put in. For a
-    table read cleanly whose deck name changed, the cards of its synced
-    notes that still sit in the old deck follow; cards the user moved
-    elsewhere, notes made by hand and the old deck itself stay as they are.
-    Records the deck names in ``result.decks_out``; returns the number of
-    notes moved.
+    The cache remembers the deck each table's cards were put in and the
+    table each row was in. For a table read cleanly, the cards of its
+    synced notes that still sit in the deck the add-on put them in (the
+    table's old deck, or the deck of the row's old table) follow; cards the
+    user moved elsewhere, notes made by hand and the old deck itself stay
+    as they are. Records the deck names in ``result.decks_out``; returns
+    the number of notes moved.
     """
     old_names = result.previous.decks
     moved = 0
@@ -566,29 +568,30 @@ def _move_renamed(
                 continue
             name = _deck_name(page, table)
             result.decks_out[db_id] = name
-            old = old_names.get(db_id)
-            if not old or old == name:
-                continue
-            old_id = col.decks.id_for_name(old)
-            if old_id is None:
-                continue
-            nids = sorted(
-                {
-                    entries[0].nid
-                    for row in table.rows
-                    for entries in [notes.get(row.source_id)]
-                    if entries
-                }
-            )
+            # old deck name -> notes whose cards may still be in it
+            by_deck: Dict[str, Set[int]] = {}
+            for row in table.rows:
+                entries = notes.get(row.source_id)
+                if not entries:
+                    continue
+                before = result.previous.rows.get(row.source_id)
+                came_from = before.db_id if before and before.db_id else db_id
+                old = old_names.get(came_from)
+                if old and old != name:
+                    by_deck.setdefault(old, set()).add(entries[0].nid)
             by_note: List[List[int]] = []
-            for nid in nids:
-                cids = col.db.list(
-                    "select id from cards where nid = ? and did = ?",
-                    nid,
-                    old_id,
-                )
-                if cids:
-                    by_note.append(cids)
+            for old, nids in sorted(by_deck.items()):
+                old_id = col.decks.id_for_name(old)
+                if old_id is None:
+                    continue
+                for nid in sorted(nids):
+                    cids = col.db.list(
+                        "select id from cards where nid = ? and did = ?",
+                        nid,
+                        old_id,
+                    )
+                    if cids:
+                        by_note.append(cids)
             if not by_note:
                 continue
             undo.begin()
