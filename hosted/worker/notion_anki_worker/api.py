@@ -7,8 +7,9 @@ import json
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -231,11 +232,17 @@ def create_app(
     app.state.scheduler = scheduler
     app.state.store = store
 
-    def require_idle() -> None:
-        if runner.running:
-            raise ApiError(
-                409, "already_running", "Wait for the current sync to finish."
-            )
+    @contextmanager
+    def no_run() -> Iterator[None]:
+        """Keep runs from starting for the block; refuse if one is running."""
+        with runner.idle() as idle:
+            if not idle:
+                raise ApiError(
+                    409,
+                    "already_running",
+                    "Wait for the current sync to finish.",
+                )
+            yield
 
     def site(authorization: str = Header(default="")) -> None:
         expected = f"Bearer {settings.api_secret}"
@@ -291,39 +298,39 @@ def create_app(
     def connect(
         body: ConnectBody, request: Request, _who: str = Depends(session)
     ) -> Dict[str, bool]:
-        require_idle()
-        if not connect_limit.allow(_client_ip(request)):
-            raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
-        try:
-            result = login(
-                body.ankiweb.username,
-                body.ankiweb.password.get_secret_value(),
-                paths.scratch,
-            )
-        except ankiweb.LoginRejected:
-            raise ApiError(
-                400,
-                "ankiweb_login_rejected",
-                "AnkiWeb rejected this ID or password.",
-            ) from None
-        except ankiweb.LoginUnavailable:
-            raise ApiError(
-                502, "ankiweb_unavailable", "Could not reach AnkiWeb."
-            ) from None
-        # the local copy may belong to another account
-        pipeline.forget_collection(paths)
-        store.put_secret(st.KEY_HKEY, result.hkey)
-        if result.endpoint:
-            store.put(st.KEY_ENDPOINT, result.endpoint)
-        else:
-            store.delete(st.KEY_ENDPOINT)
+        with no_run():
+            if not connect_limit.allow(_client_ip(request)):
+                raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
+            try:
+                result = login(
+                    body.ankiweb.username,
+                    body.ankiweb.password.get_secret_value(),
+                    paths.scratch,
+                )
+            except ankiweb.LoginRejected:
+                raise ApiError(
+                    400,
+                    "ankiweb_login_rejected",
+                    "AnkiWeb rejected this ID or password.",
+                ) from None
+            except ankiweb.LoginUnavailable:
+                raise ApiError(
+                    502, "ankiweb_unavailable", "Could not reach AnkiWeb."
+                ) from None
+            # the local copy may belong to another account
+            pipeline.forget_collection(paths)
+            store.put_secret(st.KEY_HKEY, result.hkey)
+            if result.endpoint:
+                store.put(st.KEY_ENDPOINT, result.endpoint)
+            else:
+                store.delete(st.KEY_ENDPOINT)
         return {"ok": True}
 
     @app.delete("/connect")
     def disconnect(_who: str = Depends(session)) -> Dict[str, bool]:
-        require_idle()
-        store.forget_credentials()
-        pipeline.forget_collection(paths)
+        with no_run():
+            store.forget_credentials()
+            pipeline.forget_collection(paths)
         return {"ok": True}
 
     @app.post("/notion/oauth/start")

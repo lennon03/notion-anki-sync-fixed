@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional
 
 from notion_anki_worker import pipeline
 from notion_anki_worker import store as st
@@ -65,6 +66,20 @@ class Runner:
     def running(self) -> bool:
         """Say whether a run is in progress."""
         return self._busy.locked()
+
+    @contextmanager
+    def idle(self) -> Iterator[bool]:
+        """Hold off new runs for the ``with`` block.
+
+        Yields False, and holds nothing, when a run is already in progress.
+        """
+        if not self._busy.acquire(blocking=False):
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            self._busy.release()
 
     def ready(self) -> bool:
         """Say whether a run could start."""

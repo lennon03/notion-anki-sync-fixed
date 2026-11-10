@@ -52,7 +52,8 @@ with `upload=True`. The local copy never holds anything AnkiWeb lacks, other
 than changes of a run still in progress, so it can always be thrown away.
 
 Connecting a different AnkiWeb account, or forgetting the credentials, deletes
-the local copy and the row cache.
+the local copy and the row cache. Both are refused while a run is going, and
+no run can start until they are done.
 
 The shortcut can't notice Notion's search lagging behind an edit, but it can't
 lose one either: the time it compares with only moves on after a run that read

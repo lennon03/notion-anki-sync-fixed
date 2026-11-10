@@ -122,8 +122,10 @@ in a common case, **low** = edge case or robustness.
   picker answers "Notion rejected this token" while a refresh token is stored.
 - [x] **W2 (low) `PUT /config` answers 500 when the stored token can't be
   decrypted.**
-- [ ] **W3 (low) `POST`/`DELETE /connect` check that no run is active and then
+- [x] **W3 (low) `POST`/`DELETE /connect` check that no run is active and then
   delete the local collection**; a scheduled run can start in between.
+  *Done:* both routes hold `Runner.idle()` from the check to the end, so no
+  run can start while the collection is deleted.
 - [ ] **W4 (medium) The page picker reads at most 2,000 search results, rows
   included.** In a workspace with large tables the pages can be missing.
 - [ ] **W5 (low) The "nothing to do" shortcut compares `(count, max(mod))` of

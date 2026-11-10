@@ -697,6 +697,25 @@ def test_connections_cant_change_during_a_run(h):
         h.app.state.runner._busy.release()
 
 
+def test_no_run_can_start_while_connecting_or_forgetting(h, monkeypatch):
+    h.connect()
+    h.add_page()
+    started = []
+    forget = runner.pipeline.forget_collection
+
+    def forget_and_try_a_run(paths):
+        started.append(h.app.state.runner.start("schedule"))
+        forget(paths)
+
+    monkeypatch.setattr(
+        runner.pipeline, "forget_collection", forget_and_try_a_run
+    )
+    h.connect()
+    assert h.client.delete("/connect", headers=h.headers).status_code == 200
+    assert started == [None, None]
+    assert not h.app.state.runner.running
+
+
 def test_blocking_statuses_cover_both_owner_actions():
     assert FULL_SYNC_NEEDED in runner.BLOCKING_STATUSES
 
