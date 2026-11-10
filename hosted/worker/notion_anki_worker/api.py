@@ -43,7 +43,8 @@ LINK_SECONDS = 5 * 60
 OAUTH_STATE = "notion-oauth"
 OAUTH_STATE_SECONDS = 10 * 60
 SEARCH_PAGE_SIZE = 100
-SEARCH_MAX_REQUESTS = 20
+# Notion's search can't leave out table rows, so they count here too
+SEARCH_MAX_REQUESTS = 50
 
 
 class ApiError(Exception):
@@ -136,11 +137,15 @@ def _client_ip(request: Request) -> str:
     return request.headers.get("x-client-ip") or "unknown"
 
 
-def _list_notion_pages(token: str) -> List[Dict[str, str]]:
-    """List the pages the token can read, without table rows."""
+def _list_notion_pages(token: str) -> Dict[str, Any]:
+    """List the pages the token can read, without table rows.
+
+    ``truncated`` says the search had more results than it reads.
+    """
     client = NotionClient(token)
     pages: List[Dict[str, str]] = []
     cursor = None
+    truncated = True
     for _ in range(SEARCH_MAX_REQUESTS):
         body: Dict[str, Any] = {
             "filter": {"property": "object", "value": "page"},
@@ -164,9 +169,10 @@ def _list_notion_pages(token: str) -> List[Dict[str, str]]:
             )
         cursor = found.get("next_cursor")
         if not found.get("has_more") or not cursor:
+            truncated = False
             break
     pages.sort(key=lambda p: p["title"].casefold())
-    return pages
+    return {"pages": pages, "truncated": truncated}
 
 
 def _page_titles(
@@ -200,7 +206,7 @@ def create_app(
     run_once: Callable[..., pipeline.RunOutcome] = pipeline.run_once,
     start_scheduler: bool = True,
     oauth: Optional[notion_oauth.NotionOAuth] = None,
-    list_pages: Callable[[str], List[Dict[str, str]]] = _list_notion_pages,
+    list_pages: Callable[[str], Dict[str, Any]] = _list_notion_pages,
     notion_client: Callable[[str], NotionClient] = NotionClient,
 ) -> FastAPI:
     """Build the app."""
@@ -426,7 +432,7 @@ def create_app(
 
     @app.get("/notion/pages")
     def notion_pages(_who: str = Depends(session)) -> Dict[str, Any]:
-        return {"pages": with_notion_token(list_pages)}
+        return with_notion_token(list_pages)
 
     def export_id(raw: str) -> str:
         try:

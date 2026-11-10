@@ -101,7 +101,7 @@ and the download also need `X-Session-Token`.
 | `POST /connect` | `ankiweb: {username, password}` (rate limited); Notion connects only through its sign-in |
 | `DELETE /connect` | forget the host key and the token |
 | `POST /notion/oauth/start`, `/finish` | Sign in with Notion; the state is signed by the worker |
-| `GET /notion/pages` | pages the token can read, without table rows |
+| `GET /notion/pages` | pages the token can read, without table rows; `truncated` if Notion's search had more than 5,000 results (rows count too) |
 | `GET /notion/export/page/{id}` | what an id is (page or table) and the tables on it |
 | `GET /notion/export/table/{id}/rows` | a table's rows: id and title |
 | `GET /notion/export/blocks/{id}` | a row's blocks with their children nested, for the exporter |

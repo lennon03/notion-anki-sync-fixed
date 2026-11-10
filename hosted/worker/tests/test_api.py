@@ -7,7 +7,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from notion_anki_worker import ankiweb, crypto, notion_oauth, runner
-from notion_anki_worker.api import _list_notion_pages, create_app
+from notion_anki_worker.api import (
+    SEARCH_MAX_REQUESTS,
+    _list_notion_pages,
+    create_app,
+)
 from notion_anki_worker.config import ConfigError, Settings
 from notion_anki_worker.pipeline import RunOutcome
 from notion_anki_worker.ratelimit import RateLimiter
@@ -167,7 +171,8 @@ class Harness:
         self.headers = {**SITE, "X-Session-Token": token}
 
     def page_list(self, _token):
-        return [{"id": PAGE, "title": "From Notion", "parent": ""}]
+        pages = [{"id": PAGE, "title": "From Notion", "parent": ""}]
+        return {"pages": pages, "truncated": False}
 
     def _login(self, username, password, _scratch):
         self.logins.append(username)
@@ -672,7 +677,8 @@ def test_page_list_renews_a_rejected_sign_in_once(h):
         seen.append(token)
         if token != OAUTH_TOKEN + "2":
             raise NotionError("rejected", 401)
-        return [{"id": PAGE, "title": "After renewal", "parent": ""}]
+        pages = [{"id": PAGE, "title": "After renewal", "parent": ""}]
+        return {"pages": pages, "truncated": False}
 
     h.page_list = listing
     response = h.client.get("/notion/pages", headers=h.headers)
@@ -705,9 +711,29 @@ def test_page_list_leaves_out_table_rows(monkeypatch):
             return {"results": results, "has_more": False}
 
     monkeypatch.setattr("notion_anki_worker.api.NotionClient", Client)
-    pages = _list_notion_pages("token")
+    found = _list_notion_pages("token")
+    pages = found["pages"]
     assert [p["id"] for p in pages] == ["b" * 32, "d" * 32]
     assert pages[1]["parent"] == "b" * 32
+    assert found["truncated"] is False
+
+
+def test_page_list_says_when_it_was_cut(monkeypatch):
+    asked = []
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def search(self, body):
+            asked.append(body)
+            row = {"id": "c" * 32, "parent": {"type": "data_source_id"}}
+            return {"results": [row], "has_more": True, "next_cursor": "x"}
+
+    monkeypatch.setattr("notion_anki_worker.api.NotionClient", Client)
+    found = _list_notion_pages("token")
+    assert found == {"pages": [], "truncated": True}
+    assert len(asked) == SEARCH_MAX_REQUESTS
 
 
 def test_connecting_ankiweb_forgets_the_old_collection(h):

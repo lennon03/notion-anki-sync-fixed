@@ -105,7 +105,8 @@ export const api = {
   connectAnkiWeb: (username: string, password: string) =>
     request("/api/worker/connect", "POST", { ankiweb: { username, password } }),
   disconnect: () => request("/api/worker/connect", "DELETE"),
-  notionPages: () => request<{ pages: NotionPage[] }>("/api/worker/notion/pages", "GET"),
+  notionPages: () =>
+    request<{ pages: NotionPage[]; truncated?: boolean }>("/api/worker/notion/pages", "GET"),
   exportPage: (id: string) =>
     request<ExportPage>(`/api/worker/notion/export/page/${encodeURIComponent(id)}`, "GET"),
   savePages: (pages: string[]) => request("/api/worker/config", "PUT", { pages }),

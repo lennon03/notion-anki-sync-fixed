@@ -126,8 +126,12 @@ in a common case, **low** = edge case or robustness.
   delete the local collection**; a scheduled run can start in between.
   *Done:* both routes hold `Runner.idle()` from the check to the end, so no
   run can start while the collection is deleted.
-- [ ] **W4 (medium) The page picker reads at most 2,000 search results, rows
+- [x] **W4 (medium) The page picker reads at most 2,000 search results, rows
   included.** In a workspace with large tables the pages can be missing.
+  *Done:* Notion's search has no way to leave out rows (its only filters are
+  the object type and the trash). The list now reads up to 5,000 results and
+  answers `truncated: true` when there were more; the page picker then says
+  some pages may be missing.
 - [x] **W5 (low) The "nothing to do" shortcut compares `(count, max(mod))` of
   the notes.** An edit that arrives from another device with an older `mod`
   is not noticed until the hourly full read.
