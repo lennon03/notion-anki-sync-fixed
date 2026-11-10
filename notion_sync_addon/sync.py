@@ -1862,9 +1862,11 @@ def _download_media(
     media_dir: str,
     progress: Progress = _no_progress,
 ) -> Tuple[List[Tuple[str, str]], Set[str]]:
-    """Download every collected file.
+    """Download every collected file straight to disk.
 
-    Returns (downloaded (path, fname) pairs, names that failed).
+    A file that fails to download or write fails alone: it is left out and
+    its partial file removed. Returns (downloaded (path, fname) pairs, names
+    that failed).
     """
     out: List[Tuple[str, str]] = []
     failed: Set[str] = set()
@@ -1874,19 +1876,28 @@ def _download_media(
         ext = os.path.splitext(fname)[1].lower()
         path = os.path.join(media_dir, fname)
         try:
-            blob = client.download_file(url)
+            client.download_file(url, path)
+            if not ext:
+                with open(path, "rb") as f:
+                    ext = _sniff_ext(f.read(16))
+                os.replace(path, path + ext)
+                path += ext
         except Exception:  # noqa: BLE001 - media is best-effort only
             failed.add(fname)
+            _remove_quietly(path)
             continue
-        if not ext:
-            ext = _sniff_ext(blob)
-            path += ext
-        with open(path, "wb") as f:
-            f.write(blob)
         out.append(
             (path, fname + (ext if not os.path.splitext(fname)[1] else ""))
         )
     return out, failed
+
+
+def _remove_quietly(path: str) -> None:
+    """Remove a partly written file, if there is one."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 _PLACEHOLDER = re.compile(r"@@NSMEDIA:([A-Za-z0-9_.\-]+)@@")

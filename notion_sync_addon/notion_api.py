@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import shutil
 import threading
 import time
 import urllib.request
@@ -26,6 +27,7 @@ MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 2
 MAX_RETRY_DELAY_SECONDS = 30.0
 REQUEST_TIMEOUT_SECONDS = 60
+DOWNLOAD_CHUNK_BYTES = 1 << 16
 
 
 class NotionError(Exception):
@@ -212,13 +214,20 @@ class NotionClient:
         """GET /users/me: the integration's own user."""
         return self._request("GET", "/users/me")
 
-    def download_file(self, url: str) -> bytes:
-        """Download a Notion-hosted (or external) file. No auth needed."""
+    def download_file(self, url: str, path: str) -> None:
+        """Download a Notion-hosted (or external) file to ``path``.
+
+        No auth needed. The file is copied in chunks, so a large file never
+        sits in memory. On an error ``path`` may hold part of the file.
+        """
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(
-            req, timeout=REQUEST_TIMEOUT_SECONDS
-        ) as resp:
-            return resp.read()
+        with (
+            urllib.request.urlopen(
+                req, timeout=REQUEST_TIMEOUT_SECONDS
+            ) as resp,
+            open(path, "wb") as f,
+        ):
+            shutil.copyfileobj(resp, f, DOWNLOAD_CHUNK_BYTES)
 
 
 def _error_text(status: int, path: str, payload: bytes) -> str:

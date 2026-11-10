@@ -42,10 +42,13 @@ in a common case, **low** = edge case or robustness.
 - [x] **C7 (low) A page card's `fetched_at` is taken when the card is
   rendered, not when the page's blocks were read.** On a page with many cards
   the cache can claim content is newer than it is.
-- [ ] **C8 (medium) Media is downloaded into memory, with no size limit.**
+- [x] **C8 (medium) Media is downloaded into memory, with no size limit.**
   `download_file` returns `resp.read()`; a large video can exhaust the worker's
   memory. The file is also written outside the `try`, so a full disk aborts
   the whole sync instead of failing one file.
+  *Done:* `download_file` streams to disk in 64 KB chunks, and a failed
+  download or write fails that one file (its partial file is removed).
+  There is still no size limit; disk space is the only bound.
 - [x] **C9 (low) `get_block_children` uses `assert` for a missing cursor.**
   An `AssertionError` escapes every `except NotionError` and fails the sync.
 - [ ] **C10 (low) A 2xx answer that is not JSON is marked transient but not

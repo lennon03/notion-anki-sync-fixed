@@ -717,7 +717,7 @@ def test_retry_after_parsing():
     assert retry_delay(formatdate(_time.time() - 100, usegmt=True), 2.0) == 0.0
 
 
-def test_download_has_a_timeout(monkeypatch):
+def test_download_has_a_timeout(monkeypatch, tmp_path):
     import urllib.request
 
     seen = {}
@@ -729,16 +729,44 @@ def test_download_has_a_timeout(monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def read(self):
-            return b"x"
+        def __init__(self):
+            self.chunks = [b"x", b"y"]
+
+        def read(self, size=-1):
+            return self.chunks.pop(0) if self.chunks else b""
 
     def fake_urlopen(req, timeout=None):
         seen["timeout"] = timeout
         return Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    assert NotionClient("t").download_file("https://example.com/f") == b"x"
+    path = tmp_path / "f"
+    NotionClient("t").download_file("https://example.com/f", str(path))
+    assert path.read_bytes() == b"xy"
     assert seen["timeout"] and seen["timeout"] > 0
+
+
+def test_a_media_file_that_fails_midway_fails_alone(tmp_path):
+    """A download or write that fails part way fails that one file: its
+    partial file is removed and the other files still arrive."""
+    from notion_sync_addon.sync import _download_media
+
+    class Client:
+        def download_file(self, url, path):
+            with open(path, "wb") as f:
+                f.write(b"\x89PNG\r\n\x1a\n" + url.encode())
+                if url == "u-bad":
+                    raise OSError("No space left on device")
+
+    media = MediaCollector()
+    media.add("u-bad", "bad.png")
+    media.add("u-good", "good")
+    out, failed = _download_media(
+        cast(NotionClient, Client()), media, str(tmp_path)
+    )
+    assert failed == {"bad.png"}
+    assert out == [(str(tmp_path / "good.png"), "good.png")]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["good.png"]
 
 
 def test_invalid_json_is_a_notion_error(monkeypatch):
@@ -966,10 +994,11 @@ class FakeNotion:
             for rid, r in self.tables[db]["rows"].items()
         ]
 
-    def download_file(self, url):
+    def download_file(self, url, path):
         if self.media_fail:
             raise OSError("timed out")
-        return b"\x89PNG\r\n\x1a\n" + url.encode()
+        with open(path, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + url.encode())
 
 
 P1, P2 = "1" * 32, "2" * 32
