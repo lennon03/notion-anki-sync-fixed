@@ -15,19 +15,19 @@ in a common case, **low** = edge case or robustness.
 
 ## Core: bugs
 
-- [ ] **C1 (high) Equations are not HTML-escaped.** `htmlify.py` writes an
+- [x] **C1 (high) Equations are not HTML-escaped.** `htmlify.py` writes an
   equation's expression raw between `\(`/`\)` and `\[`/`\]`. `a<b` then opens a
   tag in Anki's webview and the rest of the formula (often of the card)
   disappears. Inline and block equations.
-- [ ] **C2 (high) Indented blocks under a paragraph, and the content of a
+- [x] **C2 (high) Indented blocks under a paragraph, and the content of a
   toggle heading, are dropped.** `_render_block` downloads the children and
   then returns `<p>text</p>` or `<hN>text</hN>` without them. Indenting under a
   paragraph is common in Notion; that content never reaches the card.
-- [ ] **C3 (high) A table row's title goes into the Front field unescaped.**
+- [x] **C3 (high) A table row's title goes into the Front field unescaped.**
   `_fetch_table` takes the title's plain text and `_row_fields` writes it as
   HTML (`fields = [title, back]`). A title such as `What is <div>?` or
   `a < b` loses text. Cards from normal pages escape theirs.
-- [ ] **C4 (low) A table whose header row is its only row ends with a
+- [x] **C4 (low) A table whose header row is its only row ends with a
   stray `</tbody>`.**
 - [ ] **C5 (medium) `canonical_page_id` keeps an id's capital letters.** The
   same page pasted once in capitals and once in lowercase is read twice and

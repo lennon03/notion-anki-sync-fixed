@@ -93,7 +93,7 @@ UNCHECKED_TAG = "notion-sync::unchecked"
 #   problems: what the last sync could not read, shown in the settings dialog
 # Bump RENDER_VERSION whenever the HTML produced for a row changes so every
 # row is re-rendered once (row origins and the page structure are kept).
-RENDER_VERSION = 5
+RENDER_VERSION = 6
 # Older versions kept the cache in the collection config under this key.
 LEGACY_STATE_KEY = "notionSync.rowState"
 # Notion's last_edited_time has minute precision; a row only counts as
@@ -1620,6 +1620,9 @@ def _fetch_table(
             db_id,
             1 if recorder.volatile or live_title else 0,
         )
+        if kind == "basic" or (kind == "cloze" and _CLOZE.search(front)):
+            # the title is the field itself: Anki reads fields as HTML
+            front = html.escape(front, quote=False)
         table.rows.append(
             RowCard(
                 source_id=row_id,

@@ -76,6 +76,11 @@ def _esc(text: str) -> str:
     return html.escape(text, quote=False).replace("\n", "<br>")
 
 
+def _math(expression: Any) -> str:
+    """Escape a formula: a bare ``<`` would open a tag in Anki's webview."""
+    return html.escape(str(expression or ""), quote=False)
+
+
 def _plain(rts: List[dict]) -> str:
     return "".join(rt.get("plain_text", "") for rt in rts).strip()
 
@@ -140,7 +145,7 @@ def rich_text_to_html(rts: Optional[List[dict]]) -> str:
         elif t == "equation":
             # Anki-native MathJax inline delimiters
             out.append(
-                "\\(" + rt.get("equation", {}).get("expression", "") + "\\)"
+                "\\(" + _math(rt.get("equation", {}).get("expression")) + "\\)"
             )
         elif t == "mention":
             mention = rt.get("mention", {})
@@ -395,10 +400,13 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
             children_html = render_blocks(kids, media, tree)
 
     if btype == "paragraph":
+        if text and children_html:  # blocks indented under the paragraph
+            return f"<p>{text}</p>{_indented(children_html)}"
         return f"<p>{text}</p>" if text else (children_html or "")
     if btype.startswith("heading_"):
         level = btype.split("_")[1]
-        return f"<h{level}>{text}</h{level}>"
+        # a toggle heading: its content follows it
+        return f"<h{level}>{text}</h{level}>{children_html}"
     if btype == "quote":
         return f"<blockquote>{text}{children_html}</blockquote>"
     if btype == "callout":
@@ -421,7 +429,9 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
         )
     if btype == "equation":
         return (
-            "<div class='ns-eq'>\\[" + body.get("expression", "") + "\\]</div>"
+            "<div class='ns-eq'>\\["
+            + _math(body.get("expression"))
+            + "\\]</div>"
         )
     if btype == "divider":
         return "<hr>"
@@ -457,6 +467,13 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
     if btype == "table":
         return _render_table(block, media, tree)
     return children_html
+
+
+def _indented(children_html: str) -> str:
+    return (
+        '<div class="ns-indent" style="margin-left:1.5em">'
+        f"{children_html}</div>"
+    )
 
 
 def _notion_url(block_id: str) -> str:
@@ -513,7 +530,7 @@ def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
             else ('</thead>' if idx == 0 and col_header else '')
         )
         lines.append(f"{open_thead}<tr>{cells_html}</tr>{close_thead}")
-    if col_header:
+    if col_header and len(rows) > 1:
         lines.append("</tbody>")
     lines.append("</table>")
     return "".join(lines)
