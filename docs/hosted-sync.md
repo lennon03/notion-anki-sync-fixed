@@ -27,7 +27,8 @@ drives `prepare_sync` / `fetch_pages` / `apply_sync` the same way the add-on's
    stops the run as "full sync needed", for example an AnkiWeb account that was
    never synced from a desktop.
 3. **Shortcut.** Stop here if all of this holds: the page list and render
-   version are the same, no note was added, edited or deleted, Notion was read
+   version are the same, no note was added, edited or deleted (count, newest
+   `mod` and newest `usn` of the notes are the same), Notion was read
    in full less than an hour ago, and Notion's search shows nothing edited
    since the last full read. That costs one Notion request.
 4. Read Notion. `prepare_sync` uses the persisted row cache, so unchanged rows

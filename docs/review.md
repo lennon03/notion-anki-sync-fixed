@@ -128,9 +128,14 @@ in a common case, **low** = edge case or robustness.
   run can start while the collection is deleted.
 - [ ] **W4 (medium) The page picker reads at most 2,000 search results, rows
   included.** In a workspace with large tables the pages can be missing.
-- [ ] **W5 (low) The "nothing to do" shortcut compares `(count, max(mod))` of
+- [x] **W5 (low) The "nothing to do" shortcut compares `(count, max(mod))` of
   the notes.** An edit that arrives from another device with an older `mod`
   is not noticed until the hourly full read.
+  *Done:* the signature adds `max(usn)`. Checked against Anki's own sync
+  server: a note pulled from AnkiWeb keeps the server's `usn` of the sync
+  that brought it there, higher than any local one, even when its `mod` is
+  older or the same. Stored state from before has two values, so it doesn't
+  match once and Notion is read in full once.
 - [ ] **W6 (improvement) The whole collection is exported as a backup on every
   full read**, at least hourly, and thrown away when nothing changed.
 - [x] **W7 (low) The scheduler logs a traceback every 30 seconds** when a

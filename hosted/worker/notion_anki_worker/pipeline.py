@@ -253,11 +253,20 @@ def _bring_up_to_date(
 
 
 def _notes_signature(col: Collection) -> List[int]:
-    """Change whenever a note is added, edited or deleted (not reviewed)."""
+    """Change whenever a note is added, edited or deleted (not reviewed).
+
+    ``mod`` alone misses an edit from another device that is older than
+    the newest note, or made in the same second. A note that comes from
+    AnkiWeb keeps the server's ``usn`` of the sync that brought it there,
+    which is higher than any ``usn`` already here, so ``max(usn)`` moves.
+    """
     assert col.db is not None
-    row = col.db.first("select count(), coalesce(max(mod), 0) from notes")
+    row = col.db.first(
+        "select count(), coalesce(max(mod), 0), coalesce(max(usn), 0) "
+        "from notes"
+    )
     assert row is not None
-    return [int(row[0]), int(row[1])]
+    return [int(value) for value in row]
 
 
 def _load_state(paths: Paths) -> Dict[str, Any]:

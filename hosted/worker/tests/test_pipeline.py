@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from anki.collection import SyncOutput
+from anki.collection import Collection, SyncOutput
 from anki.errors import SyncError, SyncErrorKind
 from notion_anki_worker import pipeline
 from notion_anki_worker.pipeline import MEDIA_DB, MEDIA_FOLDER, run_once
@@ -269,6 +269,44 @@ def test_a_changed_note_reads_notion(web, notion, paths, request_):
     _rewrite_state(paths, notes=[0, 0])
     run_once(request_, paths, _say)
     assert notion.calls
+
+
+def test_an_older_edit_from_another_device_reads_notion(
+    web, notion, paths, request_, monkeypatch
+):
+    run_once(request_, paths, _say)
+    notion.calls.clear()
+    pull = Collection.sync_collection
+
+    def pull_an_edit(col, auth, sync_media):
+        # what a pull does to a note edited elsewhere: its mod is old, its
+        # usn is the server's newest
+        usn = col.db.scalar("select max(usn) from notes") + 1
+        col.db.execute(
+            "update notes set flds=?, mod=0, usn=? where id=(select min(id) "
+            "from notes)",
+            "edited elsewhere\x1f",
+            usn,
+        )
+        return pull(col, auth, sync_media)
+
+    monkeypatch.setattr(Collection, "sync_collection", pull_an_edit)
+    run_once(request_, paths, _say)
+    assert notion.calls
+
+
+def test_state_from_an_older_version_reads_notion_once(
+    web, notion, paths, request_
+):
+    run_once(request_, paths, _say)
+    state = json.loads((paths.profile / pipeline.RUN_STATE).read_text())
+    _rewrite_state(paths, notes=state["notes"][:2])
+    notion.calls.clear()
+    run_once(request_, paths, _say)
+    assert notion.calls
+    notion.calls.clear()
+    assert run_once(request_, paths, _say).message == "Nothing to sync"
+    assert notion.calls == []
 
 
 def test_notion_is_read_in_full_every_so_often(web, notion, paths, request_):
