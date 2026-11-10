@@ -439,6 +439,17 @@ def test_scheduler_starts_a_due_run_once(h):
     assert len(h.requests) == 1
 
 
+def test_scheduler_skips_quietly_when_a_secret_cant_be_read(h, caplog):
+    h.connect()
+    h.add_page()
+    h.app.state.store.put(KEY_SCHEDULE, "60")
+    h.app.state.store.put("ankiweb_hkey", "v1:not:valid")
+    h.app.state.scheduler.tick()
+    assert h.requests == []
+    assert not h.app.state.runner.running
+    assert not caplog.records
+
+
 def test_manual_schedule_never_starts_a_run(h):
     h.connect()
     h.add_page()

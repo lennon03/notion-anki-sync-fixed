@@ -191,7 +191,12 @@ class Scheduler:
         """Start a run if one is due."""
         due = self.next_run_at()
         if due is not None and due <= time.time():
-            self._runner.start("schedule")
+            try:
+                self._runner.start("schedule")
+            except NotReady:
+                # e.g. a secret stored under another key: the start-up log
+                # says so once, and the owner has to reconnect
+                pass
 
     def run_forever(self) -> None:
         """Tick until ``stop``."""

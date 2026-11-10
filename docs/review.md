@@ -133,8 +133,10 @@ in a common case, **low** = edge case or robustness.
   is not noticed until the hourly full read.
 - [ ] **W6 (improvement) The whole collection is exported as a backup on every
   full read**, at least hourly, and thrown away when nothing changed.
-- [ ] **W7 (low) The scheduler logs a traceback every 30 seconds** when a
+- [x] **W7 (low) The scheduler logs a traceback every 30 seconds** when a
   stored secret can't be decrypted (`NotReady` raised from `tick`).
+  *Done:* `tick` skips the run quietly; the start-up log already says once
+  that a secret can't be read.
 - [ ] **W8 (improvement) The hosted sync always uses the add-on's default
   options**; `sync_column`, `page_cards` and the others can't be set.
 - [ ] **W9 (low) `table_rows` reads every row before refusing a table with
