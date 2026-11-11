@@ -32,6 +32,19 @@ Cards can contain:
 
 ![MathJax, code, image, and table support](docs/supported-content.png)
 
+## New features
+
+Cloze and overlapping cloze, strikethrough tags, a sync checkbox, a `#### Hint` section, cards written in normal pages (headings, `Q:`/`A:`, `::`, cloze, numbered lists), card styles,
+code highlighting and more are explained in
+[docs/new_features.html](docs/new_features.html).
+
+## Review status
+
+A code review of the core, the hosted worker and the site is in progress.
+What it changed and what is left before `experimental` goes to `main` is
+summed up in [docs/review_status.html](docs/review_status.html); the findings
+are in [docs/review.md](docs/review.md).
+
 ## Related project
 
 [Notion Philo Workflow](https://notion-philo-workflow.vercel.app/) complements

@@ -21,7 +21,7 @@ import re
 import sys
 from typing import Any, Callable, Dict, Optional
 
-from . import sync
+from . import styles, sync
 from .notion_api import NotionClient, page_title
 
 try:
@@ -63,6 +63,10 @@ _state: Dict[str, Any] = {
     "probe": False,
     # the _CloseGuard registered while a sync op uses the collection
     "guard": None,
+    # card style picked while a sync was running: applied once it ends
+    "pending_style": None,
+    # note types chosen while a sync was running: stored once it ends
+    "pending_types": {},
 }
 
 # name under which the close guard is registered with Anki's dialog manager
@@ -292,6 +296,8 @@ def run_sync(
                 prep.structure,
                 prep.previous,
                 prep.sources,
+                media_folder=prep.media_folder,
+                should_stop=aborted,
             )
             result.cache_path = path
             return result
@@ -369,6 +375,15 @@ def _finish(generation: Optional[int] = None) -> None:
         return
     _state["busy"] = False
     _set_status(None)
+    preset = _state.get("pending_style")
+    if preset and not _state["closing"]:
+        _state["pending_style"] = None
+        # queued: the finishing sync releases its close guard first
+        mw.taskman.run_on_main(lambda: _apply_card_style(preset))
+    types = _state.get("pending_types")
+    if types and not _state["closing"] and not preset:
+        _state["pending_types"] = {}
+        mw.taskman.run_on_main(lambda: _apply_note_types(types))
 
 
 def _report(
@@ -525,7 +540,10 @@ def _start_followup_sync() -> None:
 def _schedule_autosync() -> None:
     stop_autosync()
     cfg = _config()
-    interval_minutes = int(cfg.get("sync_every_minutes") or 0)
+    try:
+        interval_minutes = int(cfg.get("sync_every_minutes") or 0)
+    except (TypeError, ValueError):  # config edited by hand
+        interval_minutes = 0
     if interval_minutes <= 0:
         return
 
@@ -568,6 +586,96 @@ def _on_profile_close() -> None:
 # --------------------------------------------------------------------- #
 
 
+def _own_model_ids(col: Any) -> list:
+    """Ids of the note types this add-on owns."""
+    return list(sync.own_model_ids(col).values())
+
+
+def _run_collection_op(
+    op: Callable[[Any], bool], done_message: str, failure: str
+) -> None:
+    """Run a small collection change in the background, like a sync.
+
+    Never next to one (their undo steps would mix): the callers queue
+    their change while a sync runs. Anki waits for it before closing the
+    collection. ``op`` returns whether it changed anything.
+    """
+    _state["generation"] += 1
+    generation = _state["generation"]
+    _state["busy"] = True
+
+    def done(changed: bool) -> None:
+        try:
+            _finish(generation)
+            if changed and mw.col is not None:
+                _op_finished(_no_changes())
+                tooltip(done_message)
+        finally:
+            _release_collection()
+
+    def failed(exc: Exception) -> None:
+        try:
+            _finish(generation)
+            if not _state["closing"]:
+                showWarning(f"Notion Sync: {failure}:\n{exc}")
+        finally:
+            _release_collection()
+
+    _hold_collection()
+    QueryOp(parent=mw, op=op, success=done).failure(failed).run_in_background()
+
+
+def _apply_card_style(preset: str) -> None:
+    """Write the preset to our note types (one undo step).
+
+    A preset picked during a sync is applied right after it.
+    """
+    if mw.col is None or styles.css_for(preset) is None:
+        return
+    if _state["busy"]:
+        _state["pending_style"] = preset
+        return
+    _run_collection_op(
+        lambda col: styles.apply_preset(col, preset, _own_model_ids(col)),
+        "Card style applied",
+        "could not apply the card style",
+    )
+
+
+def _apply_note_types(changes: Dict[str, int]) -> None:
+    """Store the note types chosen for tables (one undo step, only when
+    the choice changed). A choice made during a sync is stored after it.
+    """
+    if mw.col is None or not changes:
+        return
+    if _state["busy"]:
+        _state["pending_types"].update(changes)
+        return
+    _run_collection_op(
+        lambda col: sync.set_table_note_types(col, changes),
+        "Note types saved; new rows use them",
+        "could not save the note types",
+    )
+
+
+def _web_preview(parent: Any, document: str, _dark: bool) -> None:
+    """Show the sample card in an AnkiWebView (Anki's own renderer)."""
+    from aqt.qt import QDialog, Qt, QVBoxLayout
+    from aqt.webview import AnkiWebView
+
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Card style preview")
+    dialog.resize(560, 520)
+    layout = QVBoxLayout(dialog)
+    layout.setContentsMargins(0, 0, 0, 0)
+    web = AnkiWebView(parent=dialog)
+    layout.addWidget(web)
+    web.stdHtml(document)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.finished.connect(web.cleanup)
+    dialog.show()
+
+
 def _open_settings() -> None:
     from .settings_ui import SettingsDialog
 
@@ -576,7 +684,11 @@ def _open_settings() -> None:
         return page_title(client.get_page(page_id))
 
     def on_save(new_cfg: dict) -> None:
+        previous = _config().get("card_style") or styles.DEFAULT_PRESET
         mw.addonManager.writeConfig(__name__, new_cfg)
+        chosen = new_cfg.get("card_style") or styles.DEFAULT_PRESET
+        if chosen != previous and chosen != "custom":
+            _apply_card_style(chosen)
         _schedule_autosync()
         _redraw_toolbar()  # show/hide the toolbar link
 
@@ -584,8 +696,33 @@ def _open_settings() -> None:
         problems = sync.load_problems(sync.cache_path(ADDON_DIR, mw.pm.name))
     except Exception:  # noqa: BLE001 - the dialog must open regardless
         problems = []
+    config = _config()
+    tables: list = []
+    note_types: list = []
+    table_types: Dict[str, int] = {}
+    try:
+        page_ids = [
+            sync.canonical_page_id(
+                str(p if isinstance(p, str) else p["page_id"])
+            )
+            for p in config.get("notion_pages", [])
+        ]
+        tables = sync.known_tables(
+            sync.cache_path(ADDON_DIR, mw.pm.name), page_ids
+        )
+        if mw.col is not None and tables:
+            note_types = sync.eligible_note_types(mw.col)
+            stored = sync.table_note_types(mw.col)
+            table_types = {
+                db: stored[sync.bare_id(db)]
+                for _page, entries in tables
+                for db, _title in entries
+                if sync.bare_id(db) in stored
+            }
+    except Exception:  # noqa: BLE001 - the dialog must open regardless
+        tables = []
     dialog = SettingsDialog(
-        _config(),
+        config,
         canonical_page_id=sync.canonical_page_id,
         lookup_name=lookup_name,
         on_save=on_save,
@@ -593,6 +730,11 @@ def _open_settings() -> None:
         parent=mw,
         dark=theme_manager.night_mode,
         problems=problems,
+        preview=_web_preview,
+        tables=tables,
+        note_types=note_types,
+        table_types=table_types,
+        on_note_types=_apply_note_types,
     )
     _state["dialog"] = dialog
     try:

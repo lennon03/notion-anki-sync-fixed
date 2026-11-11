@@ -1,0 +1,28 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "tasks": {
+    "build": {
+      "outputs": [".next/**", "!.next/cache/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["build"]
+    },
+    "lint": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/pyproject.toml",
+        "$TURBO_ROOT$/setup.cfg",
+        "$TURBO_ROOT$/notion_sync_addon/**"
+      ],
+      "passThroughEnv": ["MYPYPATH", "PYTHONUTF8"]
+    },
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/notion_sync_addon/**",
+        "$TURBO_ROOT$/tests/**"
+      ],
+      "passThroughEnv": ["PYTHONUTF8", "QT_QPA_PLATFORM"]
+    }
+  }
+}

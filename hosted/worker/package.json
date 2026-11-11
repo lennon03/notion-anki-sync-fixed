@@ -1,0 +1,9 @@
+{
+  "name": "notion-anki-sync-worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "lint": "python -m black --check --config ../../pyproject.toml . && python -m isort --check-only --settings-path ../../pyproject.toml . && python -m flake8 --config ../../setup.cfg . && python -m pydocstyle --config ../../setup.cfg notion_anki_worker && python -m mypy --config-file ../../pyproject.toml -p notion_anki_worker",
+    "test": "python -m pytest tests"
+  }
+}

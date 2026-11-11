@@ -1,0 +1,18 @@
+{
+  "name": "notion-anki-sync",
+  "private": true,
+  "packageManager": "npm@12.0.2",
+  "workspaces": [
+    "hosted/web",
+    "hosted/worker"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "2.11.10"
+  }
+}

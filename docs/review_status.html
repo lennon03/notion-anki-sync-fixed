@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review status: what changed, what is left before main</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { background: #000; }
+  body {
+    margin: 0; padding: 48px 16px 96px; color: #e6e6e6;
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 8px; color: #fff; }
+  h2 { font-size: 20px; margin: 56px 0 12px; color: #fff; padding-top: 16px; border-top: 1px solid #222; }
+  h3 { font-size: 16px; margin: 28px 0 8px; color: #fff; }
+  p { margin: 0 0 12px; }
+  a { color: #7cc4ff; }
+  code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; }
+  .lede { color: #a0a0a0; margin-bottom: 28px; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 1px; background: #222; border: 1px solid #222; margin: 0 0 8px; }
+  .facts div { background: #000; padding: 14px 16px; }
+  .facts b { display: block; font-size: 24px; color: #fff; font-variant-numeric: tabular-nums; }
+  .facts span { color: #a0a0a0; font-size: 14px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin: 6px 0; }
+  .wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px 9px 0; border-bottom: 1px solid #1c1c1c; }
+  th { color: #a0a0a0; font-weight: 500; font-size: 13px; }
+  td:first-child { white-space: nowrap; }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 7px; border: 1px solid #444; color: #ccc; white-space: nowrap; }
+  .warn { border-color: #b98900; color: #ffd257; }
+  .ok { border-color: #2e7d4f; color: #7be0a4; }
+  .stop { border-color: #a33; color: #ff8f8f; }
+  .muted { color: #a0a0a0; }
+  footer { margin-top: 64px; color: #777; font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Review status</h1>
+<p class="lede">What the code review changed, and what is left before <code>experimental</code> goes to <code>main</code>. Written on 11 November 2026. Nothing listed here is merged yet: every change is an open pull request stacked on <code>experimental</code>.</p>
+
+<div class="facts">
+  <div><b>16</b><span>fix pull requests, #3 to #18</span></div>
+  <div><b>34 of 38</b><span>review points done</span></div>
+  <div><b>2,787 → 192</b><span>lines in <code>sync.py</code></span></div>
+  <div><b>12 + 7</b><span>tests deleted and merged as debt</span></div>
+</div>
+<p class="muted">The findings, each with an id, are in <a href="review.md">docs/review.md</a>. The umbrella pull request is <a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/2">#2</a>.</p>
+
+<h2>What changed</h2>
+
+<h3>Bugs that lost or garbled card content</h3>
+<ul>
+  <li>Equations were not HTML-escaped: <code>a&lt;b</code> in a formula swallowed the rest of the card.</li>
+  <li>Blocks indented under a paragraph, and the content of toggle headings, were downloaded and then dropped.</li>
+  <li>A table row's title went into the Front field as raw HTML.</li>
+</ul>
+
+<h3>Other fixes in the core and the add-on</h3>
+<ul>
+  <li>Page ids are always lowercase, and arbitrary text is no longer taken for an id.</li>
+  <li>Cards written in a normal page that hold a page mention are checked again within the hour, and are dated by when their page was read.</li>
+  <li>Media is streamed to disk instead of held in memory; one failed file no longer aborts the sync.</li>
+  <li>An answer from Notion that is not JSON is retried. A long media file name keeps its extension.</li>
+  <li>A sync interval that is not a number no longer breaks profile opening or the Settings dialog. Page names in Settings are shown as plain text.</li>
+</ul>
+
+<h3>Improvements</h3>
+<ul>
+  <li>Every data source of a database is read, not only the first.</li>
+  <li>A row moved to another table takes its cards along, if they are still in the old deck.</li>
+  <li>Row titles keep their formatting (bold, code, equations).</li>
+  <li>Rows of a table are downloaded three at a time.</li>
+</ul>
+
+<h3>Simplification</h3>
+<ul>
+  <li><code>sync.py</code> is split into <code>cache</code>, <code>note_types</code>, <code>rows</code>, <code>fetch</code>, <code>media</code> and <code>apply</code>. It still exports every name used elsewhere.</li>
+  <li>Dead code removed; helpers that existed two to four times now exist once (title extraction, plain text, the cloze and id patterns, note type creation, background collection changes, renewing the Notion sign-in).</li>
+  <li>The worker no longer calls the Notion client's private request method.</li>
+</ul>
+
+<h3>Hosted worker and site</h3>
+<ul>
+  <li>The page picker renews an expired Notion sign-in, reads up to 5,000 search results and says when its list was cut.</li>
+  <li>No run can start while connecting or disconnecting AnkiWeb deletes the local collection.</li>
+  <li>The "nothing to do" check also notices edits that arrive from another device.</li>
+  <li>Sync options (<code>sync_column</code>, <code>page_cards</code> and others) can be set through <code>PUT /config</code>.</li>
+  <li>A long run log keeps its start and its end. The scheduler no longer logs a traceback every 30 seconds when a secret can't be read.</li>
+  <li>The exporter stops reading a table once it is over its row limit, and says so clearly when more than 12 tables are chosen.</li>
+  <li>The site answers "the sync worker can't be reached" instead of a 500 while the worker wakes.</li>
+</ul>
+
+<h3>Tests</h3>
+<ul>
+  <li>Of 329 tests, 310 were kept, 7 merged and 12 deleted: duplicates, tests of private details, one that could not fail.</li>
+  <li>Four tests passed even with the behaviour they name broken. Three are fixed, one was the test that could not fail.</li>
+  <li>The 2,200-line test file is split into topical files; shared fakes are in <code>tests/helpers.py</code>.</li>
+</ul>
+
+<h2>The pull requests, in merge order</h2>
+<p>Each is based on the one above it. After #10 there are two lines; #15 joins them.</p>
+<div class="wrap">
+<table>
+  <thead><tr><th>PR</th><th>What</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/3">#3</a></td><td>Rendering bugs (C1 to C4)</td><td><span class="tag warn">re-downloads every row once</span></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/4">#4</a></td><td>Notion client and id helpers simplified</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/5">#5</a></td><td>Add-on glue and note type creation deduplicated</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/6">#6</a></td><td>One Notion sign-in renewal; site 502</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/7">#7</a></td><td>Page-card freshness; sync interval</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/8">#8</a></td><td>Media streamed to disk</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/10">#10</a></td><td><code>sync.py</code> split into modules</td><td><span class="tag warn">squash-merge</span> two stray <code>.whl</code> files in its history</td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/11">#11</a></td><td>Core leftovers</td><td>core line</td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/13">#13</a></td><td>Core improvements</td><td><span class="tag stop">look before merging</span> see below</td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/14">#14</a></td><td>Exporter row limit</td><td>core line</td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/12">#12</a></td><td>Worker points</td><td>worker line, based on #10</td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/15">#15</a></td><td>Test audit</td><td>based on #14, contains #12</td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/16">#16</a></td><td>Audit leftovers</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/17">#17</a></td><td>Exporter table limit message</td><td></td></tr>
+    <tr><td><a href="https://github.com/lennon03/notion-anki-sync-fixed/pull/18">#18</a></td><td>Settings dialog fixes</td><td></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="muted">CI (lint, add-on tests, worker tests, site build) was green on #3, #10, #17 and #18 when checked. The others were not looked at one by one.</p>
+
+<h2>What is left before <code>main</code></h2>
+
+<h3>1. Merge the stack into <code>experimental</code></h3>
+<ol>
+  <li>Merge #3 to #10, squashing #10.</li>
+  <li>Install the add-on built by CI in a real Anki and run one sync. Nothing in this review was run inside Anki, against the real Notion API or against AnkiWeb, and the split moved almost every function. The first sync downloads every row once.</li>
+  <li>Merge #11, #14, #12, #15, #16, #17, #18.</li>
+  <li>Decide on #13 (next section).</li>
+</ol>
+<p>A merge into <code>experimental</code> deploys the worker and the site at once, without waiting for CI. Its current commit, to return to if needed, is <code>ed5ba0b</code>.</p>
+
+<h3>2. Look at these before they reach your cards</h3>
+<ul>
+  <li><span class="tag stop">#13</span> <b>Three downloads at a time.</b> Tested with fakes only. If a real sync shows rate-limit warnings, take that part out; the rest of #13 stands without it.</li>
+  <li><span class="tag stop">#13</span> <b>Formatted titles.</b> The Front of existing cards changes where the title has bold, code or equations.</li>
+  <li><span class="tag warn">#12</span> <b>The "nothing to do" check</b> was tested against Anki's local sync server, not AnkiWeb. The worst case is one extra full read.</li>
+  <li><span class="tag warn">#12</span> <b>Sync options</b> have no form on the site yet; they can only be set through the API.</li>
+  <li><span class="tag warn">#17</span> and the page-picker line in #12 were typechecked, not seen in a browser.</li>
+</ul>
+
+<h3>3. Review points still open</h3>
+<ul>
+  <li><b>C11</b> A page-card note with no cache entry is asked about once a day. Needs one request against a real workspace with an integration token.</li>
+  <li><b>I4</b> Whether renaming an inline table moves its page's edit time. Needs a test page where a table can be renamed.</li>
+  <li><b>W6</b> The whole collection is exported as a backup on every full read. No way was found to skip it and keep the backup guarantee.</li>
+  <li><b>B2</b> Deploys don't wait for CI. A setting in Railway and Vercel; worth turning on before the stack lands.</li>
+</ul>
+
+<h3>4. Not reviewed</h3>
+<ul>
+  <li><code>styles.py</code> and the React components, except the exporter page.</li>
+  <li>The exporters' rendering code (<code>html.ts</code>, <code>docx.ts</code>).</li>
+  <li><code>settings_ui.py</code> was skimmed for threading, parsing and markup, not read line by line.</li>
+</ul>
+
+<h3>5. Then <code>experimental</code> to <code>main</code></h3>
+<ul>
+  <li>Pull request #2 carries the 40 commits <code>experimental</code> already had over <code>main</code> (the hosted worker and site) plus this review. It is a draft; mark it ready once the steps above are done.</li>
+  <li>Still open in <a href="../TODO.md">TODO.md</a>: the 2anki review.</li>
+</ul>
+
+<footer>This page is a snapshot. The pull requests and <a href="review.md">docs/review.md</a> are the source of truth.</footer>
+
+</main>
+</body>
+</html>

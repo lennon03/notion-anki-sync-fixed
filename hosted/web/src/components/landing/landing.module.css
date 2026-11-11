@@ -1,0 +1,237 @@
+/* Only what Tailwind can't say: keyframes, the hero's backdrop and the type
+   scale. Colours come from the T3 tokens in globals.css, so both themes work. */
+
+.display {
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  text-wrap: balance;
+}
+
+.heroTitle {
+  font-size: clamp(2.375rem, 5.6vw, 4.75rem);
+}
+
+.sectionTitle {
+  font-size: clamp(2rem, 4vw, 3rem);
+}
+
+.closingTitle {
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+}
+
+.eyebrow {
+  color: var(--contrast-muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Sticky nav: the hairline appears once the page has scrolled. */
+.nav {
+  animation: navBorder linear both;
+  animation-range: 0 2.5rem;
+  animation-timeline: scroll(root);
+}
+
+@keyframes navBorder {
+  to {
+    border-bottom-color: var(--contrast-border);
+  }
+}
+
+.heroGrid {
+  --line: color-mix(in srgb, var(--contrast-foreground) 5%, transparent);
+  background-image:
+    linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    linear-gradient(var(--line) 1px, transparent 1px);
+  background-size: 3rem 3rem;
+  inset: 0;
+  -webkit-mask-image: radial-gradient(80% 60% at 50% 0%, #000 30%, transparent 100%);
+  mask-image: radial-gradient(80% 60% at 50% 0%, #000 30%, transparent 100%);
+  pointer-events: none;
+  position: absolute;
+}
+
+.rise {
+  animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--rise-delay, 0s);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Notion syntax scattered beside the headline, on screens wide enough for it. */
+.chips {
+  display: none;
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+@media (min-width: 80rem) {
+  .chips {
+    display: block;
+  }
+}
+
+.chip {
+  animation: chipIn 1s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--rise-delay, 0s);
+  left: calc(50% + var(--chip-x));
+  position: absolute;
+  top: var(--chip-y);
+  transform: translateX(-50%) rotate(var(--chip-rotate));
+}
+
+@keyframes chipIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 1.5rem) rotate(calc(var(--chip-rotate) + 12deg)) scale(0.8);
+  }
+}
+
+/* The hero demo: each row lights up while its card shows. It only runs on
+   screen; paused (no JS, or reduced motion) it holds the first step. */
+.step,
+.row {
+  animation-duration: 12s;
+  animation-iteration-count: infinite;
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+.stepOne {
+  animation-name: stepOne;
+}
+
+.stepTwo {
+  animation-name: stepTwo;
+}
+
+.stepThree {
+  animation-name: stepThree;
+}
+
+.rowOne {
+  animation-name: rowOne;
+}
+
+.rowTwo {
+  animation-name: rowTwo;
+}
+
+.rowThree {
+  animation-name: rowThree;
+}
+
+@keyframes stepOne {
+  0%,
+  28% {
+    opacity: 1;
+  }
+  33%,
+  95% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes stepTwo {
+  0%,
+  28% {
+    opacity: 0;
+  }
+  33%,
+  61% {
+    opacity: 1;
+  }
+  66%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes stepThree {
+  0%,
+  61% {
+    opacity: 0;
+  }
+  66%,
+  95% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Same timing as the steps, on the row's own background: a pseudo-element on
+   a table row takes up a column in Chrome. */
+.row {
+  --lit: color-mix(in srgb, var(--primary) 9%, transparent);
+}
+
+@keyframes rowOne {
+  0%,
+  28%,
+  100% {
+    background-color: var(--lit);
+  }
+  33%,
+  95% {
+    background-color: transparent;
+  }
+}
+
+@keyframes rowTwo {
+  0%,
+  28%,
+  66%,
+  100% {
+    background-color: transparent;
+  }
+  33%,
+  61% {
+    background-color: var(--lit);
+  }
+}
+
+@keyframes rowThree {
+  0%,
+  61%,
+  100% {
+    background-color: transparent;
+  }
+  66%,
+  95% {
+    background-color: var(--lit);
+  }
+}
+
+/* The three cards share one cell, so the pane is as tall as the tallest. */
+.cardStack {
+  display: grid;
+}
+
+.cardStack > * {
+  grid-area: 1 / 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise,
+  .chip {
+    animation: none;
+  }
+}

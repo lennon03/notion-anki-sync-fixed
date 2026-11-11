@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Callable, List, Optional, cast
+from typing import Callable, Dict, List, Optional, Tuple, cast
+
+from . import styles
 
 try:
     from aqt.qt import (
         QAbstractButton,
         QColor,
+        QComboBox,
         QDesktopServices,
         QDialog,
         QFont,
@@ -38,6 +41,7 @@ try:
         QSize,
         QSpinBox,
         Qt,
+        QTextBrowser,
         QToolButton,
         QUrl,
         QVariantAnimation,
@@ -67,6 +71,7 @@ except ImportError:  # standalone preview
     )
     from PyQt6.QtWidgets import (  # type: ignore[no-redef,unused-ignore]
         QAbstractButton,
+        QComboBox,
         QDialog,
         QFrame,
         QHBoxLayout,
@@ -75,6 +80,7 @@ except ImportError:  # standalone preview
         QPushButton,
         QScrollArea,
         QSpinBox,
+        QTextBrowser,
         QToolButton,
         QVBoxLayout,
         QWidget,
@@ -300,6 +306,20 @@ QLineEdit#input {{
 }}
 QLineEdit#input:focus {{ border-color: {p['RING']}; }}
 QLineEdit#input[invalid="true"] {{ border-color: {p['INVALID_BORDER']}; }}
+
+QComboBox#choice {{
+    background: {p['FIELD']};
+    border: 1px solid {p['INPUT']};
+    border-radius: 8px;
+    min-height: 30px; padding: 0 11px; font-size: 14px;
+    color: {p['FOREGROUND']};
+}}
+QComboBox#choice:focus {{ border-color: {p['RING']}; }}
+QComboBox#choice QAbstractItemView {{
+    background: {p['POPOVER']}; color: {p['FOREGROUND']};
+    selection-background-color: {p['ACCENT']};
+    selection-color: {p['FOREGROUND']};
+}}
 
 QFrame#numberField {{
     background: {p['FIELD']};
@@ -629,6 +649,14 @@ def icon_button(icon_name: str, tooltip: str) -> QToolButton:
     return btn
 
 
+def _minutes(value: object) -> int:
+    """Read the sync interval; anything that isn't a number is 0 (off)."""
+    try:
+        return max(0, int(value or 0))  # type: ignore[call-overload]
+    except (TypeError, ValueError):  # config edited by hand
+        return 0
+
+
 def label(text: str, name: str) -> QLabel:
     """Create a label styled by its object name."""
     lbl = QLabel(text)
@@ -724,6 +752,19 @@ def _name_signals() -> _NameSignals:
     return _NAME_SIGNALS[0]
 
 
+def show_text_preview(parent: QWidget, document: str, dark: bool) -> None:
+    """Show the sample card in a plain QTextBrowser (crude CSS support)."""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Card style preview")
+    dialog.resize(560, 520)
+    lay = QVBoxLayout(dialog)
+    view = QTextBrowser()
+    view.setHtml(document)
+    lay.addWidget(view)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+    dialog.show()
+
+
 class SettingsDialog(QDialog):
     """Notion Sync settings, laid out like a T3 Code settings panel.
 
@@ -734,6 +775,11 @@ class SettingsDialog(QDialog):
         on_save: receives the new config dict.
         on_sync: called after a successful "Sync now" save.
         problems: what the last sync could not read, shown above the pages.
+        tables: (page id, [(database id, title)...]) the last sync saw.
+        note_types: (id, name) of the note types a table can export to.
+        table_types: database id -> id of the note type chosen so far.
+        on_note_types: receives {database id: note type id (0 = default)}
+            for the tables whose choice changed.
     """
 
     def __init__(
@@ -746,6 +792,11 @@ class SettingsDialog(QDialog):
         parent: Optional[QWidget] = None,
         dark: bool = False,
         problems: Optional[List[str]] = None,
+        preview: Optional[Callable[[QWidget, str, bool], None]] = None,
+        tables: Optional[List[Tuple[str, List[Tuple[str, str]]]]] = None,
+        note_types: Optional[List[Tuple[int, str]]] = None,
+        table_types: Optional[Dict[str, int]] = None,
+        on_note_types: Optional[Callable[[Dict[str, int]], None]] = None,
     ) -> None:
         super().__init__(parent)
         use_theme(dark)
@@ -760,6 +811,7 @@ class SettingsDialog(QDialog):
         self.resize(680, 830)
         self.setMinimumWidth(560)
 
+        self._cfg = dict(cfg)
         self._canonical = canonical_page_id
         self._lookup = lookup_name
         self._on_save = on_save
@@ -768,6 +820,13 @@ class SettingsDialog(QDialog):
         self._signals.resolved.connect(self._apply_name)
         self._problems = list(problems or [])
         self._page_rows: dict = {}
+        self._preview = preview or show_text_preview
+        self._dark = dark
+        self._tables = list(tables or [])
+        self._note_types = list(note_types or [])
+        self._table_types = dict(table_types or {})
+        self._on_note_types = on_note_types
+        self._type_combos: Dict[str, QComboBox] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -790,6 +849,8 @@ class SettingsDialog(QDialog):
 
         self._build_connection(cfg)
         self._build_sync(cfg)
+        self._build_cards(cfg)
+        self._build_note_types()
         self._build_pages(cfg)
         self._body.addStretch(1)
 
@@ -799,6 +860,7 @@ class SettingsDialog(QDialog):
     def apply_theme(self, dark: bool) -> None:
         """Restyle in place when Anki switches between light and dark."""
         use_theme(dark)
+        self._dark = dark
         self.setStyleSheet(build_stylesheet(P))
         refresh_icons(self)
         for edit in self.findChildren(QLineEdit):
@@ -885,7 +947,7 @@ class SettingsDialog(QDialog):
         self.interval = NumberField(
             0,
             10080,
-            max(0, int(cfg.get("sync_every_minutes") or 0)),
+            _minutes(cfg.get("sync_every_minutes")),
             step=5,
             suffix=" min",
             special="Off",
@@ -920,6 +982,87 @@ class SettingsDialog(QDialog):
             )
         )
         self._body.addWidget(card)
+
+    def _build_cards(self, cfg: dict) -> None:
+        self._section("Cards")
+        card = Card()
+        self.card_style = QComboBox()
+        self.card_style.setObjectName("choice")
+        for key, text in styles.PRESET_LABELS.items():
+            self.card_style.addItem(text, key)
+        saved = str(cfg.get("card_style") or styles.DEFAULT_PRESET)
+        index = self.card_style.findData(saved)
+        self.card_style.setCurrentIndex(max(index, 0))
+        self.preview_button = button("Preview")
+        self.preview_button.clicked.connect(self._show_preview)
+        controls = QWidget()
+        lay = QHBoxLayout(controls)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self.card_style)
+        lay.addWidget(self.preview_button)
+        card.add_row(
+            setting_row(
+                "Card style",
+                "Applied once to the note types this add-on creates when "
+                "you save. Pick Custom to keep your own CSS.",
+                control=controls,
+            )
+        )
+        self._body.addWidget(card)
+
+    def selected_style(self) -> str:
+        """Return the key of the chosen card style."""
+        return str(self.card_style.currentData() or styles.DEFAULT_PRESET)
+
+    def _build_note_types(self) -> None:
+        """One note type picker per table the last sync saw."""
+        self._section("Note types")
+        card = Card()
+        self.note_types_card = card
+        if not self._tables or self._on_note_types is None:
+            card.add_row(
+                setting_row(
+                    "No tables yet",
+                    "Tables appear here after the first sync. Each can "
+                    "export new rows to one of your own note types.",
+                )
+            )
+            self._body.addWidget(card)
+            return
+        for _page_id, entries in self._tables:
+            for db_id, title in entries:
+                combo = QComboBox()
+                combo.setObjectName("choice")
+                combo.addItem("Notion Sync Card (default)", 0)
+                for mid, name in self._note_types:
+                    combo.addItem(name, mid)
+                saved = self._table_types.get(db_id, 0)
+                combo.setCurrentIndex(max(combo.findData(saved), 0))
+                row = setting_row(
+                    title or "Untitled table",
+                    "New rows only: cards already synced keep their note "
+                    "type. Needs a type with a Source field.",
+                    control=combo,
+                )
+                for lbl in row.findChildren(QLabel):
+                    lbl.setTextFormat(Qt.TextFormat.PlainText)  # user data
+                card.add_row(row)
+                self._type_combos[db_id] = combo
+        self._body.addWidget(card)
+
+    def chosen_note_types(self) -> Dict[str, int]:
+        """Return {database id: note type id} for the tables changed."""
+        out: Dict[str, int] = {}
+        for db_id, combo in self._type_combos.items():
+            mid = int(combo.currentData() or 0)
+            if mid != self._table_types.get(db_id, 0):
+                out[db_id] = mid
+        return out
+
+    def _show_preview(self) -> None:
+        document = styles.preview_document(self.selected_style(), self._dark)
+        self._preview(self, document, self._dark)
 
     def _build_problems(self) -> None:
         """Warning card: what the last sync couldn't read."""
@@ -1068,6 +1211,7 @@ class SettingsDialog(QDialog):
         text = QVBoxLayout()
         text.setSpacing(2)
         title = label(name or "Loading page name...", "pageName")
+        title.setTextFormat(Qt.TextFormat.PlainText)  # a Notion title
         title.setProperty("pending", not name)
         text.addWidget(title)
         text.addWidget(label(page_id, "pageId"))
@@ -1158,14 +1302,23 @@ class SettingsDialog(QDialog):
             self.status.setText(f"{n} page{'s' if n != 1 else ''} · {auto}")
 
     def config(self) -> dict:
-        """Return the config as currently entered."""
-        return {
-            "notion_token": self.token.text().strip(),
-            "notion_pages": self.page_ids(),
-            "include_empty_cards": self.empty_cards.isChecked(),
-            "sync_with_ankiweb": self.with_ankiweb.isChecked(),
-            "sync_every_minutes": self.interval.value(),
-        }
+        """Return the config as currently entered.
+
+        Keys the dialog doesn't show (e.g. column names) are kept as they
+        were.
+        """
+        out = dict(self._cfg)
+        out.update(
+            {
+                "notion_token": self.token.text().strip(),
+                "notion_pages": self.page_ids(),
+                "include_empty_cards": self.empty_cards.isChecked(),
+                "sync_with_ankiweb": self.with_ankiweb.isChecked(),
+                "sync_every_minutes": self.interval.value(),
+                "card_style": self.selected_style(),
+            }
+        )
+        return out
 
     def save(self) -> bool:
         """Pass the config to ``on_save``; False if it isn't complete."""
@@ -1174,4 +1327,11 @@ class SettingsDialog(QDialog):
             self.page_input.setFocus()
             return False
         self._on_save(self.config())
+        changed = self.chosen_note_types()
+        if changed and self._on_note_types is not None:
+            self._on_note_types(changed)
+            self._table_types.update({k: v for k, v in changed.items() if v})
+            for db_id, mid in changed.items():
+                if not mid:
+                    self._table_types.pop(db_id, None)
         return True

@@ -15,9 +15,17 @@ This module is standalone (no Anki imports) so it can be unit tested.
 
 from __future__ import annotations
 
+import copy
 import html
+import os
 import re
 from typing import Any, Dict, List, Optional
+
+from .highlight import highlight, language_slug
+from .notion_api import plain_text
+
+MAX_FILE_NAME = 120
+MAX_EXTENSION = 10  # longest kept extension, dot included
 
 
 class MediaCollector:
@@ -37,6 +45,11 @@ class MediaCollector:
         self.files[fname] = url
         self.order.append(fname)
         return self._placeholder(fname)
+
+    def extend(self, other: "MediaCollector") -> None:
+        """Add the files ``other`` collected, in its order."""
+        for fname in other.order:
+            self.add(other.files[fname], fname)
 
     @staticmethod
     def _placeholder(fname: str) -> str:
@@ -60,9 +73,16 @@ def _file_safe(name: str) -> str:
     Lowercase only: on Windows Anki stores the first copy of a file under a
     lowercased name but returns the name as given when the same file is
     added again, so a mixed-case name would flip between syncs (and not
-    match the stored file on case-sensitive AnkiDroid/iOS).
+    match the stored file on case-sensitive AnkiDroid/iOS). A long name is
+    cut to ``MAX_FILE_NAME`` characters before its extension, which is kept.
     """
-    return re.sub(r"[^a-z0-9_.\-]+", "_", name.lower())[:120] or "media"
+    name = re.sub(r"[^a-z0-9_.\-]+", "_", name.lower())
+    if len(name) > MAX_FILE_NAME:
+        stem, ext = os.path.splitext(name)
+        if len(ext) > MAX_EXTENSION:  # a dot in a long name, not a type
+            stem, ext = name, ""
+        name = stem[: MAX_FILE_NAME - len(ext)] + ext
+    return name or "media"
 
 
 def _attr(text: str) -> str:
@@ -73,8 +93,9 @@ def _esc(text: str) -> str:
     return html.escape(text, quote=False).replace("\n", "<br>")
 
 
-def _plain(rts: List[dict]) -> str:
-    return "".join(rt.get("plain_text", "") for rt in rts).strip()
+def _math(expression: Any) -> str:
+    """Escape a formula: a bare ``<`` would open a tag in Anki's webview."""
+    return html.escape(str(expression or ""), quote=False)
 
 
 # --------------------------------------------------------------------- #
@@ -137,7 +158,7 @@ def rich_text_to_html(rts: Optional[List[dict]]) -> str:
         elif t == "equation":
             # Anki-native MathJax inline delimiters
             out.append(
-                "\\(" + rt.get("equation", {}).get("expression", "") + "\\)"
+                "\\(" + _math(rt.get("equation", {}).get("expression")) + "\\)"
             )
         elif t == "mention":
             mention = rt.get("mention", {})
@@ -158,6 +179,73 @@ def _tint(hex_color: str) -> str:
     g = int(hex_color[3:5], 16)
     b = int(hex_color[5:7], 16)
     return f"rgba({r}, {g}, {b}, 0.2)"
+
+
+# --------------------------------------------------------------------- #
+# Tags: struck-through text
+# --------------------------------------------------------------------- #
+
+
+class StrikeTags:
+    """A block source whose struck-through text is taken out as tags.
+
+    Wraps anything with ``children(block_id)``. Every struck-through run of
+    text in the blocks it returns is removed from them and its words are
+    collected in ``tags`` (split at commas, not cleaned). Code and equation
+    blocks are left alone.
+    """
+
+    def __init__(self, tree: Any) -> None:
+        self._tree = tree
+        self.tags: List[str] = []
+
+    def children(self, block_id: str) -> List[dict]:
+        """Return the child blocks without their struck-through text."""
+        return [self._strip(b) for b in self._tree.children(block_id)]
+
+    def strip_blocks(self, blocks: List[dict]) -> List[dict]:
+        """Return ``blocks`` without their struck-through text."""
+        return [self._strip(b) for b in blocks]
+
+    def strip_rich(self, rts: List[dict]) -> List[dict]:
+        """Return rich text without its struck-through text."""
+        return self._clean(rts)
+
+    def _strip(self, block: dict) -> dict:
+        btype = block.get("type")
+        body = block.get(btype) if isinstance(btype, str) else None
+        if not isinstance(body, dict) or btype in ("code", "equation"):
+            return block
+        block = copy.deepcopy(block)
+        body = block[btype]
+        if isinstance(body.get("rich_text"), list):
+            body["rich_text"] = self._clean(body["rich_text"])
+        if isinstance(body.get("cells"), list):  # table row
+            body["cells"] = [
+                self._clean(c) if isinstance(c, list) else c
+                for c in body["cells"]
+            ]
+        return block
+
+    def _clean(self, rts: List[dict]) -> List[dict]:
+        kept: List[dict] = []
+        run: List[str] = []
+        for rt in rts:
+            struck = rt.get("type", "text") == "text" and (
+                rt.get("annotations") or {}
+            ).get("strikethrough")
+            if struck:
+                run.append((rt.get("text") or {}).get("content", ""))
+                continue
+            self._flush(run)
+            kept.append(rt)
+        self._flush(run)
+        return kept
+
+    def _flush(self, run: List[str]) -> None:
+        if run:
+            self.tags += "".join(run).split(",")
+            run.clear()
 
 
 # --------------------------------------------------------------------- #
@@ -187,6 +275,15 @@ _BLOCK_BODY_TYPES = (
     "embed",
     "link_preview",
     "divider",
+    "synced_block",
+    "column_list",
+    "column",
+    "link_to_page",
+    "child_page",
+)
+
+_NOT_SHARED_NOTE = (
+    '<p class="ns-note">[synced block not shared with the integration]</p>'
 )
 
 _CODE_BLOCK_STYLE = (
@@ -230,6 +327,54 @@ def render_blocks(blocks: List[dict], media: MediaCollector, tree: Any) -> str:
     return "\n".join(x for x in out if x)
 
 
+_LIST_TYPES = ("bulleted_list_item", "numbered_list_item", "to_do")
+
+
+def _split_rich_lines(rts: Optional[List[dict]]) -> List[List[dict]]:
+    """Cut rich text at its line breaks (formatting stays balanced)."""
+    lines: List[List[dict]] = [[]]
+    for rt in rts or []:
+        if rt.get("type", "text") != "text":
+            lines[-1].append(rt)
+            continue
+        text = rt.get("text") or {}
+        for index, piece in enumerate(
+            str(text.get("content", "")).split("\n")
+        ):
+            if index:
+                lines.append([])
+            if piece:
+                lines[-1].append({**rt, "text": {**text, "content": piece}})
+    return lines
+
+
+def render_lines(
+    blocks: List[dict], media: MediaCollector, tree: Any
+) -> List[str]:
+    """Render top-level blocks as separate lines of HTML.
+
+    Every block is a line, every list item too (as its inner HTML) and a
+    paragraph is cut at its line breaks. Empty lines and dividers are
+    dropped.
+    """
+    out: List[str] = []
+    for block in blocks:
+        btype = block.get("type")
+        if btype not in _BLOCK_BODY_TYPES or btype == "divider":
+            continue
+        if btype in _LIST_TYPES:
+            item = _render_list_items([block], btype, media, tree)
+            out.append(re.sub(r"(?s)^<li>(.*)</li>$", r"\1", item))
+        elif btype == "paragraph" and not block.get("has_children"):
+            rich = (block.get("paragraph") or {}).get("rich_text")
+            out += [
+                rich_text_to_html(line) for line in _split_rich_lines(rich)
+            ]
+        else:
+            out.append(_render_block(block, media, tree))
+    return [line for line in out if line.strip()]
+
+
 def _render_list_items(
     items: List[dict], btype: str, media: MediaCollector, tree: Any
 ) -> str:
@@ -258,16 +403,23 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
     body = block.get(btype, {})
     text = rich_text_to_html(body.get("rich_text"))
     children_html = ""
-    if block.get("has_children") and btype != "table":
+    if btype == "synced_block":
+        return _render_synced(block, media, tree)
+    if btype in ("child_page", "link_to_page"):
+        pass  # never inline another page's content
+    elif block.get("has_children") and btype != "table":
         kids = tree.children(block.get("id"))
         if kids:
             children_html = render_blocks(kids, media, tree)
 
     if btype == "paragraph":
+        if text and children_html:  # blocks indented under the paragraph
+            return f"<p>{text}</p>{_indented(children_html)}"
         return f"<p>{text}</p>" if text else (children_html or "")
     if btype.startswith("heading_"):
         level = btype.split("_")[1]
-        return f"<h{level}>{text}</h{level}>"
+        # a toggle heading: its content follows it
+        return f"<h{level}>{text}</h{level}>{children_html}"
     if btype == "quote":
         return f"<blockquote>{text}{children_html}</blockquote>"
     if btype == "callout":
@@ -281,14 +433,18 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
     if btype == "toggle":
         return f"<details><summary>{text}</summary>{children_html}</details>"
     if btype == "code":
-        content = _plain(body.get("rich_text") or [])
+        content = plain_text(body.get("rich_text")).strip()
+        lang = body.get("language") or ""
         return (
             f'<pre class="ns-code" style="{_CODE_BLOCK_STYLE}">'
-            f'<code>{html.escape(content)}</code></pre>'
+            f'<code class="language-{language_slug(lang)}">'
+            f"{highlight(content, lang)}</code></pre>"
         )
     if btype == "equation":
         return (
-            "<div class='ns-eq'>\\[" + body.get("expression", "") + "\\]</div>"
+            "<div class='ns-eq'>\\["
+            + _math(body.get("expression"))
+            + "\\]</div>"
         )
     if btype == "divider":
         return "<hr>"
@@ -298,24 +454,58 @@ def _render_block(block: dict, media: MediaCollector, tree: Any) -> str:
         url = body.get("url", "")
         caption = rich_text_to_html(body.get("caption"))
         return f'<p><a href="{_attr(url)}">{_esc(url)}</a>{caption}</p>'
+    if btype == "column_list":
+        return (
+            '<div class="ns-columns" '
+            'style="display:flex;flex-wrap:wrap;gap:12px">'
+            f"{children_html}</div>"
+        )
+    if btype == "column":
+        return (
+            '<div class="ns-column" style="flex:1 1 200px;min-width:0">'
+            f"{children_html}</div>"
+        )
     if btype == "link_to_page":
-        lr = body.get("link_to_page", {})
-        href = _attr(lr.get("page_url", "") or lr.get("url", ""))
-        return f'<p><a href="{href}">→ page</a></p>'
+        target = body.get("page_id") or body.get("database_id") or ""
+        return f'<p><a href="{_notion_url(target)}">→ linked page</a></p>'
     if btype == "child_page":
         return (
-            f'<p><a href="{_attr(body.get("url", ""))}">'
+            f'<p><a href="{_notion_url(block.get("id", ""))}">'
             f'{_esc(body.get("title") or "child page")}</a></p>'
         )
-    if btype == "child_database":
-        href = _attr(block.get("url", ""))
-        name = _esc(body.get("title") or "table")
-        return f'<p><a href="{href}">→ {name}</a></p>'
     if btype == "table":
         return _render_table(block, media, tree)
-    if btype == "synced_block":
-        return children_html
     return children_html
+
+
+def _indented(children_html: str) -> str:
+    return (
+        '<div class="ns-indent" style="margin-left:1.5em">'
+        f"{children_html}</div>"
+    )
+
+
+def _notion_url(block_id: str) -> str:
+    return _attr("https://www.notion.so/" + str(block_id).replace("-", ""))
+
+
+def _render_synced(block: dict, media: MediaCollector, tree: Any) -> str:
+    """Render a synced block; copies show the original's children."""
+    body = block.get("synced_block") or {}
+    source = (body.get("synced_from") or {}).get("block_id")
+    if not source:
+        if not block.get("has_children"):
+            return ""
+        return render_blocks(tree.children(block.get("id")), media, tree)
+    try:
+        kids = tree.children(source)
+    except Exception as e:
+        # 403/404: the original isn't shared. Transient errors propagate so
+        # the row is retried instead of caching a wrong render.
+        if getattr(e, "transient", False) or not getattr(e, "status", 0):
+            raise
+        return _NOT_SHARED_NOTE
+    return render_blocks(kids, media, tree) if kids else ""
 
 
 def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
@@ -349,7 +539,7 @@ def _render_table(block: dict, media: MediaCollector, tree: Any) -> str:
             else ('</thead>' if idx == 0 and col_header else '')
         )
         lines.append(f"{open_thead}<tr>{cells_html}</tr>{close_thead}")
-    if col_header:
+    if col_header and len(rows) > 1:
         lines.append("</tbody>")
     lines.append("</table>")
     return "".join(lines)

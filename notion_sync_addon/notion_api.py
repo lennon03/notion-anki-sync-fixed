@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
+import shutil
 import threading
 import time
 import urllib.request
@@ -26,6 +28,7 @@ MAX_RETRIES = 4
 RETRY_BACKOFF_SECONDS = 2
 MAX_RETRY_DELAY_SECONDS = 30.0
 REQUEST_TIMEOUT_SECONDS = 60
+DOWNLOAD_CHUNK_BYTES = 1 << 16
 
 
 class NotionError(Exception):
@@ -102,8 +105,6 @@ class NotionClient:
     def _request(
         self, method: str, path: str, data: Optional[dict] = None
     ) -> dict:
-        if path.startswith(BASE_URL):
-            path = path[len(BASE_URL) :]
         url = "/v1" + path
         body = json.dumps(data).encode("utf-8") if data is not None else None
         attempt = 0
@@ -132,11 +133,15 @@ class NotionClient:
                 try:
                     return json.loads(payload.decode("utf-8"))
                 except ValueError as e:  # truncated or non-JSON body
-                    raise NotionError(
-                        f"Invalid response from Notion for {path}: {e}",
-                        status,
-                        transient=True,
-                    ) from e
+                    # a proxy page or a cut answer: retry like a network error
+                    if attempt > MAX_RETRIES:
+                        raise NotionError(
+                            f"Invalid response from Notion for {path}: {e}",
+                            status,
+                            transient=True,
+                        ) from e
+                    time.sleep(RETRY_BACKOFF_SECONDS * (attempt - 1))
+                    continue
             if status == 429 or status >= 500:
                 if attempt > MAX_RETRIES:
                     raise NotionError(
@@ -154,9 +159,6 @@ class NotionClient:
                 status,
             )
 
-    def _iterate(self, results: List[dict], has_more: bool) -> List[dict]:
-        return list(results)
-
     # ------------------------------------------------------------------ #
     # Read endpoints
     # ------------------------------------------------------------------ #
@@ -167,19 +169,17 @@ class NotionClient:
 
     def get_block_children(self, block_id: str) -> List[dict]:
         """All children blocks of a page or block, following pagination."""
-        url = f"{BASE_URL}/blocks/{block_id}/children?page_size=100"
+        path = f"/blocks/{block_id}/children?page_size=100"
         out: List[dict] = []
+        cursor = ""
         while True:
-            data = self._request("GET", url)
-            out += data.get("results", [])
-            if not data.get("has_more"):
-                return out
-            cursor = data.get("next_cursor")
-            assert isinstance(cursor, str)
-            url = (
-                f"{BASE_URL}/blocks/{block_id}/children"
-                f"?page_size=100&start_cursor={cursor}"
+            data = self._request(
+                "GET", path + (f"&start_cursor={cursor}" if cursor else "")
             )
+            out += data.get("results", [])
+            cursor = data.get("next_cursor") or ""
+            if not data.get("has_more") or not cursor:
+                return out
 
     def get_database(self, database_id: str) -> dict:
         """GET /databases/<id>: title and data sources of a database."""
@@ -190,13 +190,18 @@ class NotionClient:
         return self._request("GET", f"/data_sources/{data_source_id}")
 
     def query_data_source(
-        self, data_source_id: str, title_only: bool = True
+        self,
+        data_source_id: str,
+        title_only: bool = False,
+        stop_after: int = 0,
     ) -> List[dict]:
         """All row pages of a data source, following pagination.
 
-        ``title_only`` asks Notion to return just the title property: the
-        sync only needs the title plus each row's built-in id and
-        last_edited_time, so the other columns are dead weight.
+        Every property comes back by default: the sync reads its checkbox,
+        tags and other columns from the listing (same number of requests).
+        ``title_only`` asks Notion for just the title property instead.
+        ``stop_after`` stops asking once more rows than that have come
+        back (0 = read them all): for callers that refuse a larger table.
         """
         out: List[dict] = []
         path = f"/data_sources/{data_source_id}/query"
@@ -209,15 +214,32 @@ class NotionClient:
                 payload["start_cursor"] = data["next_cursor"]
             data = self._request("POST", path, payload)
             out += data.get("results", [])
+            if stop_after and len(out) > stop_after:
+                break
         return out
 
-    def download_file(self, url: str) -> bytes:
-        """Download a Notion-hosted (or external) file. No auth needed."""
+    def search(self, body: dict) -> dict:
+        """POST /search: one page of what the token can read."""
+        return self._request("POST", "/search", body)
+
+    def me(self) -> dict:
+        """GET /users/me: the integration's own user."""
+        return self._request("GET", "/users/me")
+
+    def download_file(self, url: str, path: str) -> None:
+        """Download a Notion-hosted (or external) file to ``path``.
+
+        No auth needed. The file is copied in chunks, so a large file never
+        sits in memory. On an error ``path`` may hold part of the file.
+        """
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(
-            req, timeout=REQUEST_TIMEOUT_SECONDS
-        ) as resp:
-            return resp.read()
+        with (
+            urllib.request.urlopen(
+                req, timeout=REQUEST_TIMEOUT_SECONDS
+            ) as resp,
+            open(path, "wb") as f,
+        ):
+            shutil.copyfileobj(resp, f, DOWNLOAD_CHUNK_BYTES)
 
 
 def _error_text(status: int, path: str, payload: bytes) -> str:
@@ -244,14 +266,47 @@ def retry_delay(retry_after: Optional[str], default: float) -> float:
     return max(0.0, when.timestamp() - time.time())
 
 
+def plain_text(rich: Any) -> str:
+    """Join Notion rich text into plain text ("" if it isn't a list)."""
+    if not isinstance(rich, list):
+        return ""
+    return "".join(
+        str(x.get("plain_text") or "") for x in rich if isinstance(x, dict)
+    )
+
+
+def title_rich_text(obj: dict) -> List[dict]:
+    """Return the rich text of a page's (or row's) title property."""
+    for prop in (obj.get("properties") or {}).values():
+        if isinstance(prop, dict) and prop.get("type") == "title":
+            return prop.get("title") or []
+    return []
+
+
 def page_title(obj: dict) -> str:
     """Extract the plain-text title from a page object."""
-    for prop in obj.get("properties", {}).values():
-        if prop.get("type") == "title":
-            return "".join(
-                x.get("plain_text", "") for x in prop.get("title", [])
-            ).strip()
-    return ""
+    return plain_text(title_rich_text(obj)).strip()
+
+
+def canonical_page_id(raw: str) -> str:
+    """Turn a Notion URL or dashed/undashed id into the plain 32-hex id."""
+    raw = raw.strip()
+    bare = raw.replace("-", "")
+    if re.fullmatch(r"[0-9a-fA-F]{32}", bare):
+        return bare.lower()
+    # a link: the id follows the title words (.../Philo-Histoire-<32hex>)
+    match = re.search(
+        r"(?i)([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[0-9a-f]{32})",
+        raw,
+    )
+    if match:
+        return match.group(1).replace("-", "").lower()
+    raise NotionError(f"Cannot parse page id: {raw}")
+
+
+def bare_id(notion_id: str) -> str:
+    """Return a Notion id without dashes, in lowercase."""
+    return str(notion_id or "").replace("-", "").lower()
 
 
 class BlockSource(Protocol):

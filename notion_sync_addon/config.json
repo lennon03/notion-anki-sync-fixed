@@ -2,6 +2,10 @@
   "notion_token": "",
   "notion_pages": [],
   "include_empty_cards": true,
+  "sync_column": "Anki",
+  "page_cards": true,
+  "card_type_column": "Card type",
   "sync_every_minutes": 0,
-  "sync_with_ankiweb": false
+  "sync_with_ankiweb": false,
+  "card_style": "classic"
 }
