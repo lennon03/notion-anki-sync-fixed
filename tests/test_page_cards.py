@@ -2,7 +2,7 @@
 """Cards written as text in a normal page (headings, Q:/A:, ::, cloze)."""
 
 from notion_sync_addon.pagecards import parse_page, split_spec
-from tests.test_htmlify_and_sync import P1
+from tests.helpers import P1, _bold, _para, _rt
 
 HEX = "0123456789abcdef"
 
@@ -382,3 +382,17 @@ def test_page_cards_of_a_failed_page_cost_no_row_lookup(env):
     env.notion.calls.clear()
     env.sync()
     assert ("page", _b(1)) not in env.notion.calls
+
+
+def test_a_page_card_question_keeps_its_formatting(env):
+    """I5: the same rule for cards written in a normal page."""
+    question = {
+        "id": "b001".ljust(32, "0"),
+        "type": "heading_3",
+        "has_children": False,
+        "heading_3": {"rich_text": _bold("Why") + _rt("?")},
+    }
+    answer = _para("Because.") | {"id": "b002".ljust(32, "0")}
+    env.notion.page_blocks[P1] = [question, answer]
+    env.sync()
+    assert env.note("b001".ljust(32, "0"))["Front"] == "<b>Why</b>?"

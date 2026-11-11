@@ -1,16 +1,9 @@
 # -*- coding: utf-8 -*-
 """Export a table's new rows to a note type the user chose."""
 
+from notion_sync_addon.sync import canonical_page_id
+from tests.helpers import DB1, DB2, P1, _para, _rid
 from tests.test_columns import _assert_noop, _edit
-from tests.test_htmlify_and_sync import qapp  # noqa: F401 - fixture
-from tests.test_htmlify_and_sync import (
-    DB1,
-    DB2,
-    P1,
-    _para,
-    _rid,
-    canonical_page_id,
-)
 
 ROW = _rid(0)
 OTHER = _rid(1)
@@ -244,7 +237,7 @@ def test_set_table_note_types_validates_and_is_one_undo_step(env):
     assert env.sync_mod.own_model_ids(env.col).keys() == {"basic"}
 
 
-def test_dialog_lists_tables_and_reports_only_changes(qapp):  # noqa: F811
+def test_dialog_lists_tables_and_reports_only_changes(qapp):
     from notion_sync_addon.settings_ui import SettingsDialog
 
     saved: list = []
@@ -273,7 +266,7 @@ def test_dialog_lists_tables_and_reports_only_changes(qapp):  # noqa: F811
     assert dialog.save() and len(saved) == 1
 
 
-def test_dialog_without_tables_still_works(qapp):  # noqa: F811
+def test_dialog_without_tables_still_works(qapp):
     from notion_sync_addon.settings_ui import SettingsDialog
 
     dialog = SettingsDialog(

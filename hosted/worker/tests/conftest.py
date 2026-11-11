@@ -19,14 +19,7 @@ from notion_anki_worker.pipeline import Paths, RunRequest  # noqa: E402
 
 from notion_sync_addon import fetch as addon_fetch  # noqa: E402
 from notion_sync_addon import sync as addon_sync  # noqa: E402
-from tests.test_htmlify_and_sync import (  # noqa: E402
-    DB1,
-    OLD,
-    P1,
-    FakeNotion,
-    _para,
-    _rid,
-)
+from tests.helpers import DB1, OLD, P1, FakeNotion, _para, _rid  # noqa: E402
 
 
 class SearchingNotion(FakeNotion):

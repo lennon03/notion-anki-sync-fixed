@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Renaming a Notion page or table moves its existing cards."""
 
-from tests.test_htmlify_and_sync import DB1, DB2, P1, P2, _rid
+from tests.helpers import DB1, DB2, P1, P2, _rid
 
 NEW = "2026-01-02T00:00:00.000Z"
 
@@ -110,3 +110,23 @@ def test_decks_are_parsed_leniently(tmp_path):
     with open(path, "w", encoding="utf-8") as f:
         f.write('{"v": 1, "decks": {"a": "A::B", "b": 3, "c": ""}}')
     assert load_cache(path).decks == {"a": "A::B"}
+
+
+def _move_row(env, row_id, src, dst):
+    row = env.notion.tables[src]["rows"].pop(row_id)
+    row[1] = "2026-01-02T00:00:00.000Z"
+    env.notion.tables[dst]["rows"][row_id] = row
+
+
+def test_a_row_moved_to_another_table_moves_its_cards(env):
+    """I3: like a renamed table, only cards still in the old deck move."""
+    env.sync()
+    mine = env.col.decks.id("Mine", create=True)
+    env.col.set_deck(env.col.card_ids_of_note(env.note(_rid(1)).id), mine)
+    _move_row(env, _rid(0), DB1, DB2)
+    _move_row(env, _rid(1), DB1, DB2)
+    env.sync()
+    assert _deck_of(env, _rid(0)) == "Philo::Notions"
+    assert _deck_of(env, _rid(1)) == "Mine"  # moved by the user: stays
+    assert _deck_of(env, _rid(2)) == "Hist::Defs"
+    assert env.sync()["updated"] == 0

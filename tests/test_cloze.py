@@ -2,8 +2,8 @@
 """Cloze and overlapping cloze rows."""
 
 from notion_sync_addon.htmlify import MediaCollector, render_lines
+from tests.helpers import DB1, _para, _rid, _rt
 from tests.test_columns import _assert_noop, _edit
-from tests.test_htmlify_and_sync import DB1, _para, _rid, _rt
 
 ROW = _rid(0)
 OTHER = _rid(1)

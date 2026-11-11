@@ -115,7 +115,7 @@ def test_default_preview_does_not_crash(qapp):
 
 def test_style_picked_during_a_sync_waits_for_it(addon, env, monkeypatch):
     """No style op runs next to a sync; it holds the close guard too."""
-    from tests.test_htmlify_and_sync import _Dialogs
+    from tests.helpers import _Dialogs
 
     env.sync()
     mod = addon.mod

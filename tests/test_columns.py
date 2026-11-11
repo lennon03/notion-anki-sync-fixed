@@ -12,7 +12,7 @@ from notion_sync_addon.sync import (
     fingerprint,
     row_columns,
 )
-from tests.test_htmlify_and_sync import DB1, _para, _rid
+from tests.helpers import DB1, _para, _rid
 
 EDITED = "2026-01-02T00:00:00.000Z"
 ROW = _rid(0)

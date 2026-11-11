@@ -6,9 +6,9 @@ import re
 import pytest
 
 from notion_sync_addon.sync import OverlapSpec, _row_fields, parse_overlap
+from tests.helpers import _para
 from tests.test_cloze import ROW, _kind, _page
 from tests.test_columns import _assert_noop, _edit
-from tests.test_htmlify_and_sync import _para
 
 WORDS = ("one", "two", "three", "four", "five", "six")
 

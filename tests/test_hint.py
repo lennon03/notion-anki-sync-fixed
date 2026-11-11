@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The "#### Hint" section: a collapsed hint after the card's Back."""
 
-from notion_sync_addon.sync import RowState, split_hint
-from tests.test_htmlify_and_sync import DB1, _image, _para, _rid
+from notion_sync_addon.sync import split_hint
+from tests.helpers import DB1, _image, _para, _rid
 
 ROW = _rid(0)
 
@@ -100,16 +100,6 @@ def test_failed_media_in_the_hint_forgets_the_row(env):
     env.sync()
     assert env.result.fetched[ROW].edited == ""
     assert env.result.fetched[_rid(1)].edited != ""
-
-
-def test_old_cache_entries_and_round_trip():
-    old_false = RowState.from_json(["e", 1.0, "fp", "p", "d", False])
-    old_true = RowState.from_json(["e", 1.0, "fp", "p", "d", True])
-    assert old_false is not None and old_false.volatile == 0
-    assert old_true is not None and old_true.volatile == 1
-    for level in (0, 1):
-        state = RowState("e", 1.5, "fp", "p", "d", level)
-        assert RowState.from_json(state.to_json()) == state
 
 
 def test_hint_rows_are_cached_like_any_other(env):

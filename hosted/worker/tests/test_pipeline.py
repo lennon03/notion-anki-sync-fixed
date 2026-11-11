@@ -16,7 +16,7 @@ from notion_anki_worker.store import (
 )
 
 from notion_sync_addon.notion_api import NotionError
-from tests.test_htmlify_and_sync import DB1, OLD, P1, P2, _para, _rid
+from tests.helpers import DB1, OLD, P1, P2, _para, _rid
 
 
 def _say(_line):
