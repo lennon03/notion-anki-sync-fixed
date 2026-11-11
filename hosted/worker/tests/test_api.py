@@ -910,6 +910,22 @@ def test_export_reports_a_rejected_sign_in_without_a_refresh_token(h):
     assert "Notion API error" not in response.text
 
 
+def test_export_stops_reading_rows_at_its_limit(monkeypatch):
+    from notion_anki_worker import export_read
+
+    asked = {}
+
+    class Client:
+        def query_data_source(self, source_id, title_only=False, stop_after=0):
+            asked.update(title_only=title_only, stop_after=stop_after)
+            return [{"id": "r", "properties": {}}] * (stop_after + 1)
+
+    monkeypatch.setattr(export_read, "MAX_ROWS", 3)
+    with pytest.raises(export_read.TooLarge):
+        export_read.table_rows(Client(), "a" * 32)
+    assert asked == {"title_only": True, "stop_after": 3}
+
+
 def test_export_refuses_more_than_a_request_can_read(h, monkeypatch):
     _finish(h, _state(h))
     monkeypatch.setattr("notion_anki_worker.export_read.MAX_TREE_BLOCKS", 1)

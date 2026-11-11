@@ -252,9 +252,7 @@ def _fetch_page(
 
     fetched_at = time.time()
     blocks = tree.children(page_id)
-    _collect_page_children(
-        page_id, client, tree, media, data, result, blocks=blocks
-    )
+    _collect_page_children(page_id, client, tree, media, data, result, blocks)
     _page_cards(
         page_id,
         edited,
@@ -451,10 +449,8 @@ def _collect_page_children(
     media: MediaCollector,
     data: PageData,
     result: SyncResult,
-    blocks: Optional[list] = None,
+    blocks: List[dict],
 ) -> None:
-    if blocks is None:
-        blocks = tree.children(page_id)
     databases = []
     for block in blocks:
         if block.get("type") == "child_database":
