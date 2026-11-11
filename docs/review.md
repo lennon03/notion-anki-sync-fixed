@@ -180,11 +180,11 @@ in a common case, **low** = edge case or robustness.
   `page_cards`, `sync_column`, `card_type_column`), validated and stored;
   `GET /status` shows the options in use and each run applies them. Not
   done: a form on the site (set them through the API for now).
-- [ ] **W9 (low) `table_rows` reads every row before refusing a table with
+- [x] **W9 (low) `table_rows` reads every row before refusing a table with
   more than 1,000.**
-  *Left open:* the client's only public query, `query_data_source`, reads
-  every page of results. Stopping early needs a core change, such as a
-  `limit` argument there.
+  *Done:* `query_data_source` takes `stop_after` and stops asking once it
+  has more rows than that; `table_rows` passes the limit. The sync does not
+  use it.
 - [x] **W10 (low) A run's log stops silently at 500 lines**, losing the
   closing `Timings` line.
   *Done:* a long log keeps its first 100 lines and its latest ones, with one
@@ -198,3 +198,59 @@ in a common case, **low** = edge case or robustness.
   sync worker can't be reached".
 - [ ] **B2 (improvement) A push deploys without waiting for CI** (already
   noted in `hosted-sync.md`).
+
+## Tests
+
+The owner asked which tests are useful and which are debt. Every test of
+`tests/` and `hosted/worker/tests/` was read; where a test looked unable to
+fail, the code under it was broken on purpose to see.
+
+**Layout.** `test_htmlify_and_sync.py` (2,200 lines) held the fakes that
+every other file and the worker imported. The fakes and builders
+(`FakeNotion`, `_para`, `_rid`, `P1`, `DB1`, ...) are now in
+`tests/helpers.py`, the fixtures (`env`, `addon`, `qapp`, `frozen_now`) in
+`tests/conftest.py`. Its tests and those of the three `test_review_*` files
+went to topical files: `test_render`, `test_notion_api`, `test_cache`,
+`test_fetch`, `test_removal`, `test_apply`, `test_media`, `test_addon` and
+`test_settings_dialog`. The move is its own commit, with no test changed.
+
+**Verdict**, in test functions (a parametrized test counts once):
+
+| Suite | Before | Kept | Merged | Deleted | After |
+| --- | --- | --- | --- | --- | --- |
+| core (`tests/`) | 231 | 215 | 4 | 12 | 215 |
+| worker | 98 | 95 | 3 | 0 | 95 |
+
+Coverage of `notion_sync_addon` stays at 71%.
+
+Kinds of debt found:
+
+- **Duplicates.** A unit test whose assertion an end-to-end test already
+  makes, with the same setup or a superset of it (an image's placeholder
+  name, a failed query marking the sync incomplete, an existing note type's
+  CSS, a reply that is never JSON, a note of unknown origin kept, a page that
+  can't be read, the decks recorded on the first sync).
+- **Implementation details.** The return type of `_render_blocks`, the
+  shape of `synced_notes`, the `tags` of a row object, a private
+  `_headers` attribute, the internal media placeholder, a copy of the
+  default CSS string, a list of statuses checked instead of what they do.
+- **Tests that could not fail.** One computed the visible lines of an
+  overlapping cloze from its own parameters and passed with the window CSS
+  removed. One checked a token from the config was "truthy" and passed when
+  the config was ignored. One only asserted inside `if Anki refused it`, and
+  Anki never refused, so the refusal path was never run. The last two are
+  fixed rather than deleted: they now fail when the behaviour breaks.
+- **Code that is not ours.** One test pinned how Anki renders multi-id
+  clozes; the reason for not using them is in `docs/new_features.html`.
+- **A dead path.** One test fed `_collect_page_children` with no blocks, a
+  path no caller takes; the real "a page's blocks are read once" is pinned
+  by `test_unchanged_page_reuses_table_list_and_data_source`.
+
+Safety tests (no card removed when part of Notion can't be read, notes made
+by hand never touched, no full upload, secrets scrubbed, fixed error
+messages, the session gate and rate limits, the dirty marker and backups,
+undo in one step) were all kept; two were merged into a test that already
+asserted the same thing, and the pause after "reconnect AnkiWeb" gained a
+test it lacked. The nine settings dialog tests need `libEGL`, which some
+containers lack. They could not be run here, so only their
+imports changed.
