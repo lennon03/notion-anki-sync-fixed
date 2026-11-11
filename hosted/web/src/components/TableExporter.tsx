@@ -23,6 +23,7 @@ import {
   type Status,
   api,
 } from "~/lib/api";
+import { MAX_TABLES, isNotionId } from "~/lib/export/request";
 
 const FORMATS = { pdf: "PDF", docx: "Word", html: "HTML" } as const;
 type Format = keyof typeof FORMATS;
@@ -44,7 +45,7 @@ function signedOut(failure: unknown): boolean {
 
 function parsePageId(input: string): string | null {
   const value = input.trim();
-  if (/^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i.test(value)) return value;
+  if (isNotionId(value)) return value;
   try {
     return (
       new URL(value).pathname.match(/([0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i)?.[1] ??
@@ -310,6 +311,10 @@ function ExportPageView({ pageId }: { pageId: string }) {
   const run = useCallback(async () => {
     if (chosen.length === 0) {
       setResult({ kind: "error", text: "Choose at least one table." });
+      return;
+    }
+    if (chosen.length > MAX_TABLES) {
+      setResult({ kind: "error", text: `Choose at most ${MAX_TABLES} tables for one export.` });
       return;
     }
     setResult(null);
