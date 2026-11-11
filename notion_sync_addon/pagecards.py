@@ -202,15 +202,6 @@ def split_spec(rts: List[dict]) -> Tuple[List[dict], Optional[str]]:
     return _keep_chars(rts, m.start()), body
 
 
-def _plain_question(block: dict) -> bool:
-    return block.get("type") in (
-        "paragraph",
-        "bulleted_list_item",
-        "numbered_list_item",
-        "quote",
-    )
-
-
 def parse_page(blocks: List[dict]) -> List[PageCard]:
     """Find the cards in the top-level blocks of a page."""
     blocks = _expand(blocks)
