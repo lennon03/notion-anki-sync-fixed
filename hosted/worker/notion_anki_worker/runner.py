@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional
 
 from notion_anki_worker import pipeline
 from notion_anki_worker import store as st
@@ -66,6 +67,20 @@ class Runner:
         """Say whether a run is in progress."""
         return self._busy.locked()
 
+    @contextmanager
+    def idle(self) -> Iterator[bool]:
+        """Hold off new runs for the ``with`` block.
+
+        Yields False, and holds nothing, when a run is already in progress.
+        """
+        if not self._busy.acquire(blocking=False):
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            self._busy.release()
+
     def ready(self) -> bool:
         """Say whether a run could start."""
         return (
@@ -90,6 +105,7 @@ class Runner:
             notion_token=token,
             page_ids=pages,
             full=full,
+            options=store.options(),
         )
 
     def start(self, trigger: str, full: bool = False) -> Optional[int]:
@@ -176,7 +192,12 @@ class Scheduler:
         """Start a run if one is due."""
         due = self.next_run_at()
         if due is not None and due <= time.time():
-            self._runner.start("schedule")
+            try:
+                self._runner.start("schedule")
+            except NotReady:
+                # e.g. a secret stored under another key: the start-up log
+                # says so once, and the owner has to reconnect
+                pass
 
     def run_forever(self) -> None:
         """Tick until ``stop``."""

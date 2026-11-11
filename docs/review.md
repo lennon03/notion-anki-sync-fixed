@@ -147,23 +147,48 @@ in a common case, **low** = edge case or robustness.
   picker answers "Notion rejected this token" while a refresh token is stored.
 - [x] **W2 (low) `PUT /config` answers 500 when the stored token can't be
   decrypted.**
-- [ ] **W3 (low) `POST`/`DELETE /connect` check that no run is active and then
+- [x] **W3 (low) `POST`/`DELETE /connect` check that no run is active and then
   delete the local collection**; a scheduled run can start in between.
-- [ ] **W4 (medium) The page picker reads at most 2,000 search results, rows
+  *Done:* both routes hold `Runner.idle()` from the check to the end, so no
+  run can start while the collection is deleted.
+- [x] **W4 (medium) The page picker reads at most 2,000 search results, rows
   included.** In a workspace with large tables the pages can be missing.
-- [ ] **W5 (low) The "nothing to do" shortcut compares `(count, max(mod))` of
+  *Done:* Notion's search has no way to leave out rows (its only filters are
+  the object type and the trash). The list now reads up to 5,000 results and
+  answers `truncated: true` when there were more; the page picker then says
+  some pages may be missing.
+- [x] **W5 (low) The "nothing to do" shortcut compares `(count, max(mod))` of
   the notes.** An edit that arrives from another device with an older `mod`
   is not noticed until the hourly full read.
+  *Done:* the signature adds `max(usn)`. Checked against Anki's own sync
+  server: a note pulled from AnkiWeb keeps the server's `usn` of the sync
+  that brought it there, higher than any local one, even when its `mod` is
+  older or the same. Stored state from before has two values, so it doesn't
+  match once and Notion is read in full once.
 - [ ] **W6 (improvement) The whole collection is exported as a backup on every
   full read**, at least hourly, and thrown away when nothing changed.
-- [ ] **W7 (low) The scheduler logs a traceback every 30 seconds** when a
+  *Left open:* whether a run changes anything is only known after
+  `apply_sync`, and by then the state before it is gone, so skipping the
+  export would break "a backup exists whenever a run changed something".
+- [x] **W7 (low) The scheduler logs a traceback every 30 seconds** when a
   stored secret can't be decrypted (`NotReady` raised from `tick`).
-- [ ] **W8 (improvement) The hosted sync always uses the add-on's default
+  *Done:* `tick` skips the run quietly; the start-up log already says once
+  that a secret can't be read.
+- [x] **W8 (improvement) The hosted sync always uses the add-on's default
   options**; `sync_column`, `page_cards` and the others can't be set.
+  *Done:* `PUT /config` takes `options` (`include_empty_cards`,
+  `page_cards`, `sync_column`, `card_type_column`), validated and stored;
+  `GET /status` shows the options in use and each run applies them. Not
+  done: a form on the site (set them through the API for now).
 - [ ] **W9 (low) `table_rows` reads every row before refusing a table with
   more than 1,000.**
-- [ ] **W10 (low) A run's log stops silently at 500 lines**, losing the
+  *Left open:* the client's only public query, `query_data_source`, reads
+  every page of results. Stopping early needs a core change, such as a
+  `limit` argument there.
+- [x] **W10 (low) A run's log stops silently at 500 lines**, losing the
   closing `Timings` line.
+  *Done:* a long log keeps its first 100 lines and its latest ones, with one
+  "N lines left out" line between them.
 
 ## Site
 

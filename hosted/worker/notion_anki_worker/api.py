@@ -7,8 +7,9 @@ import json
 import logging
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
 
 from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -25,7 +26,7 @@ from notion_anki_worker import store as st
 from notion_anki_worker.config import Settings
 from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import register
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StrictBool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from notion_sync_addon.notion_api import NotionClient, NotionError, page_title
@@ -42,7 +43,8 @@ LINK_SECONDS = 5 * 60
 OAUTH_STATE = "notion-oauth"
 OAUTH_STATE_SECONDS = 10 * 60
 SEARCH_PAGE_SIZE = 100
-SEARCH_MAX_REQUESTS = 20
+# Notion's search can't leave out table rows, so they count here too
+SEARCH_MAX_REQUESTS = 50
 
 
 class ApiError(Exception):
@@ -78,11 +80,24 @@ class ConnectBody(_Body):
     ankiweb: AnkiWebLogin
 
 
+class SyncOptions(_Body):
+    """Add-on options for the hosted sync; one left out keeps its value.
+
+    An empty column name turns that column off, as in the add-on.
+    """
+
+    include_empty_cards: Optional[StrictBool] = None
+    page_cards: Optional[StrictBool] = None
+    sync_column: Optional[str] = Field(default=None, max_length=100)
+    card_type_column: Optional[str] = Field(default=None, max_length=100)
+
+
 class ConfigBody(_Body):
     """``PUT /config``."""
 
     pages: Optional[List[str]] = Field(default=None, max_length=MAX_PAGES)
     schedule_minutes: Optional[int] = None
+    options: Optional[SyncOptions] = None
 
 
 class OAuthFinishBody(_Body):
@@ -135,11 +150,15 @@ def _client_ip(request: Request) -> str:
     return request.headers.get("x-client-ip") or "unknown"
 
 
-def _list_notion_pages(token: str) -> List[Dict[str, str]]:
-    """List the pages the token can read, without table rows."""
+def _list_notion_pages(token: str) -> Dict[str, Any]:
+    """List the pages the token can read, without table rows.
+
+    ``truncated`` says the search had more results than it reads.
+    """
     client = NotionClient(token)
     pages: List[Dict[str, str]] = []
     cursor = None
+    truncated = True
     for _ in range(SEARCH_MAX_REQUESTS):
         body: Dict[str, Any] = {
             "filter": {"property": "object", "value": "page"},
@@ -163,9 +182,10 @@ def _list_notion_pages(token: str) -> List[Dict[str, str]]:
             )
         cursor = found.get("next_cursor")
         if not found.get("has_more") or not cursor:
+            truncated = False
             break
     pages.sort(key=lambda p: p["title"].casefold())
-    return pages
+    return {"pages": pages, "truncated": truncated}
 
 
 def _page_titles(
@@ -199,7 +219,7 @@ def create_app(
     run_once: Callable[..., pipeline.RunOutcome] = pipeline.run_once,
     start_scheduler: bool = True,
     oauth: Optional[notion_oauth.NotionOAuth] = None,
-    list_pages: Callable[[str], List[Dict[str, str]]] = _list_notion_pages,
+    list_pages: Callable[[str], Dict[str, Any]] = _list_notion_pages,
     notion_client: Callable[[str], NotionClient] = NotionClient,
 ) -> FastAPI:
     """Build the app."""
@@ -231,11 +251,17 @@ def create_app(
     app.state.scheduler = scheduler
     app.state.store = store
 
-    def require_idle() -> None:
-        if runner.running:
-            raise ApiError(
-                409, "already_running", "Wait for the current sync to finish."
-            )
+    @contextmanager
+    def no_run() -> Iterator[None]:
+        """Keep runs from starting for the block; refuse if one is running."""
+        with runner.idle() as idle:
+            if not idle:
+                raise ApiError(
+                    409,
+                    "already_running",
+                    "Wait for the current sync to finish.",
+                )
+            yield
 
     def site(authorization: str = Header(default="")) -> None:
         expected = f"Bearer {settings.api_secret}"
@@ -279,6 +305,7 @@ def create_app(
             "notion_oauth_available": oauth is not None,
             "pages": store.pages(),
             "schedule_minutes": store.schedule_minutes(),
+            "options": pipeline.sync_options(store.options()),
             "next_run_at": scheduler.next_run_at(),
             "running": runner.running,
             "latest": latest,
@@ -291,39 +318,39 @@ def create_app(
     def connect(
         body: ConnectBody, request: Request, _who: str = Depends(session)
     ) -> Dict[str, bool]:
-        require_idle()
-        if not connect_limit.allow(_client_ip(request)):
-            raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
-        try:
-            result = login(
-                body.ankiweb.username,
-                body.ankiweb.password.get_secret_value(),
-                paths.scratch,
-            )
-        except ankiweb.LoginRejected:
-            raise ApiError(
-                400,
-                "ankiweb_login_rejected",
-                "AnkiWeb rejected this ID or password.",
-            ) from None
-        except ankiweb.LoginUnavailable:
-            raise ApiError(
-                502, "ankiweb_unavailable", "Could not reach AnkiWeb."
-            ) from None
-        # the local copy may belong to another account
-        pipeline.forget_collection(paths)
-        store.put_secret(st.KEY_HKEY, result.hkey)
-        if result.endpoint:
-            store.put(st.KEY_ENDPOINT, result.endpoint)
-        else:
-            store.delete(st.KEY_ENDPOINT)
+        with no_run():
+            if not connect_limit.allow(_client_ip(request)):
+                raise ApiError(429, "rate_limited", "Too many attempts. Wait.")
+            try:
+                result = login(
+                    body.ankiweb.username,
+                    body.ankiweb.password.get_secret_value(),
+                    paths.scratch,
+                )
+            except ankiweb.LoginRejected:
+                raise ApiError(
+                    400,
+                    "ankiweb_login_rejected",
+                    "AnkiWeb rejected this ID or password.",
+                ) from None
+            except ankiweb.LoginUnavailable:
+                raise ApiError(
+                    502, "ankiweb_unavailable", "Could not reach AnkiWeb."
+                ) from None
+            # the local copy may belong to another account
+            pipeline.forget_collection(paths)
+            store.put_secret(st.KEY_HKEY, result.hkey)
+            if result.endpoint:
+                store.put(st.KEY_ENDPOINT, result.endpoint)
+            else:
+                store.delete(st.KEY_ENDPOINT)
         return {"ok": True}
 
     @app.delete("/connect")
     def disconnect(_who: str = Depends(session)) -> Dict[str, bool]:
-        require_idle()
-        store.forget_credentials()
-        pipeline.forget_collection(paths)
+        with no_run():
+            store.forget_credentials()
+            pipeline.forget_collection(paths)
         return {"ok": True}
 
     @app.post("/notion/oauth/start")
@@ -419,7 +446,7 @@ def create_app(
 
     @app.get("/notion/pages")
     def notion_pages(_who: str = Depends(session)) -> Dict[str, Any]:
-        return {"pages": with_notion_token(list_pages)}
+        return with_notion_token(list_pages)
 
     def export_id(raw: str) -> str:
         try:
@@ -466,6 +493,10 @@ def create_app(
                     422, "invalid_schedule", "Pick one of the schedules."
                 )
             store.put(st.KEY_SCHEDULE, str(body.schedule_minutes))
+        if body.options is not None:
+            options = store.options()
+            options.update(body.options.model_dump(exclude_none=True))
+            store.put(st.KEY_OPTIONS, json.dumps(options))
         if body.pages is not None:
             try:
                 ids = list(

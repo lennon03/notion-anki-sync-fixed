@@ -7,12 +7,23 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from notion_anki_worker import ankiweb, crypto, notion_oauth, runner
-from notion_anki_worker.api import _list_notion_pages, create_app
+from notion_anki_worker.api import (
+    SEARCH_MAX_REQUESTS,
+    _list_notion_pages,
+    create_app,
+)
 from notion_anki_worker.config import ConfigError, Settings
 from notion_anki_worker.pipeline import RunOutcome
 from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import ScrubbingFormatter, register, scrub
-from notion_anki_worker.store import FULL_SYNC_NEEDED, KEY_SCHEDULE, OK
+from notion_anki_worker.store import (
+    FULL_SYNC_NEEDED,
+    KEY_SCHEDULE,
+    LOG_HEAD_LINES,
+    MAX_LOG_LINES,
+    OK,
+    Store,
+)
 
 from notion_sync_addon.notion_api import NotionError
 
@@ -160,7 +171,8 @@ class Harness:
         self.headers = {**SITE, "X-Session-Token": token}
 
     def page_list(self, _token):
-        return [{"id": PAGE, "title": "From Notion", "parent": ""}]
+        pages = [{"id": PAGE, "title": "From Notion", "parent": ""}]
+        return {"pages": pages, "truncated": False}
 
     def _login(self, username, password, _scratch):
         self.logins.append(username)
@@ -439,6 +451,17 @@ def test_scheduler_starts_a_due_run_once(h):
     assert len(h.requests) == 1
 
 
+def test_scheduler_skips_quietly_when_a_secret_cant_be_read(h, caplog):
+    h.connect()
+    h.add_page()
+    h.app.state.store.put(KEY_SCHEDULE, "60")
+    h.app.state.store.put("ankiweb_hkey", "v1:not:valid")
+    h.app.state.scheduler.tick()
+    assert h.requests == []
+    assert not h.app.state.runner.running
+    assert not caplog.records
+
+
 def test_manual_schedule_never_starts_a_run(h):
     h.connect()
     h.add_page()
@@ -481,6 +504,20 @@ def test_backup_link_downloads_and_expires(h):
 def test_backup_routes_only_serve_backups(h, name):
     response = h.client.post(f"/backups/{name}/link", headers=h.headers)
     assert response.status_code in (404, 422)
+
+
+def test_a_long_log_keeps_its_start_and_its_end(tmp_path):
+    store = Store(tmp_path / "s.sqlite3", crypto.Vault(bytes(32)))
+    run_id = store.start_run("manual")
+    total = MAX_LOG_LINES + 250
+    for n in range(total):
+        store.append_log(run_id, f"line {n}")
+    log = [line["text"] for line in store.latest_run()["log"]]
+    assert len(log) == MAX_LOG_LINES
+    assert log[0] == "line 0" and log[-1] == f"line {total - 1}"
+    kept = MAX_LOG_LINES - 1
+    assert f"{total - kept} lines left out" in log[LOG_HEAD_LINES]
+    assert log[LOG_HEAD_LINES + 1] == f"line {total - kept + LOG_HEAD_LINES}"
 
 
 def test_scrubber_removes_known_and_token_shaped_secrets():
@@ -640,12 +677,45 @@ def test_page_list_renews_a_rejected_sign_in_once(h):
         seen.append(token)
         if token != OAUTH_TOKEN + "2":
             raise NotionError("rejected", 401)
-        return [{"id": PAGE, "title": "After renewal", "parent": ""}]
+        pages = [{"id": PAGE, "title": "After renewal", "parent": ""}]
+        return {"pages": pages, "truncated": False}
 
     h.page_list = listing
     response = h.client.get("/notion/pages", headers=h.headers)
     assert response.json()["pages"][0]["title"] == "After renewal"
     assert h.oauth.refreshes == 1 and len(seen) == 2
+
+
+def test_sync_options_are_stored_shown_and_used(h):
+    h.connect()
+    h.add_page()
+    assert h.status()["options"]["sync_column"] == "Anki"
+    for options in ({"sync_column": "Learn"}, {"page_cards": False}):
+        response = h.client.put(
+            "/config", json={"options": options}, headers=h.headers
+        )
+        assert response.status_code == 200, response.text
+    shown = h.status()["options"]
+    assert shown["sync_column"] == "Learn" and shown["page_cards"] is False
+    assert shown["include_empty_cards"] is True
+    h.sync()
+    assert h.requests[0].options == {
+        "sync_column": "Learn",
+        "page_cards": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"page_cards": "no"}, {"notion_token": "x"}, {"sync_column": 1}],
+)
+def test_sync_options_are_validated(h, options):
+    response = h.client.put(
+        "/config", json={"options": options}, headers=h.headers
+    )
+    assert response.status_code == 422
+    assert response.json()["error"] == "invalid_request"
+    assert h.status()["options"]["page_cards"] is True
 
 
 def test_config_survives_a_token_that_cannot_be_decrypted(h):
@@ -673,9 +743,29 @@ def test_page_list_leaves_out_table_rows(monkeypatch):
             return {"results": results, "has_more": False}
 
     monkeypatch.setattr("notion_anki_worker.api.NotionClient", Client)
-    pages = _list_notion_pages("token")
+    found = _list_notion_pages("token")
+    pages = found["pages"]
     assert [p["id"] for p in pages] == ["b" * 32, "d" * 32]
     assert pages[1]["parent"] == "b" * 32
+    assert found["truncated"] is False
+
+
+def test_page_list_says_when_it_was_cut(monkeypatch):
+    asked = []
+
+    class Client:
+        def __init__(self, _token):
+            pass
+
+        def search(self, body):
+            asked.append(body)
+            row = {"id": "c" * 32, "parent": {"type": "data_source_id"}}
+            return {"results": [row], "has_more": True, "next_cursor": "x"}
+
+    monkeypatch.setattr("notion_anki_worker.api.NotionClient", Client)
+    found = _list_notion_pages("token")
+    assert found == {"pages": [], "truncated": True}
+    assert len(asked) == SEARCH_MAX_REQUESTS
 
 
 def test_connecting_ankiweb_forgets_the_old_collection(h):
@@ -695,6 +785,25 @@ def test_connections_cant_change_during_a_run(h):
         )
     finally:
         h.app.state.runner._busy.release()
+
+
+def test_no_run_can_start_while_connecting_or_forgetting(h, monkeypatch):
+    h.connect()
+    h.add_page()
+    started = []
+    forget = runner.pipeline.forget_collection
+
+    def forget_and_try_a_run(paths):
+        started.append(h.app.state.runner.start("schedule"))
+        forget(paths)
+
+    monkeypatch.setattr(
+        runner.pipeline, "forget_collection", forget_and_try_a_run
+    )
+    h.connect()
+    assert h.client.delete("/connect", headers=h.headers).status_code == 200
+    assert started == [None, None]
+    assert not h.app.state.runner.running
 
 
 def test_blocking_statuses_cover_both_owner_actions():

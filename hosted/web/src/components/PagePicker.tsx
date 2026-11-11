@@ -48,6 +48,7 @@ export function PagePicker({
   const savedKey = saved.map((page) => page.id).join(",");
   const savedIds = useMemo(() => new Set(savedKey ? savedKey.split(",") : []), [savedKey]);
   const [pages, setPages] = useState<NotionPage[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(savedIds);
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
@@ -56,8 +57,11 @@ export function PagePicker({
 
   const load = useCallback(async () => {
     setPages(null);
+    setTruncated(false);
     try {
-      setPages((await api.notionPages()).pages);
+      const found = await api.notionPages();
+      setPages(found.pages);
+      setTruncated(Boolean(found.truncated));
     } catch (failure) {
       setPages([]);
       onError(failure instanceof ApiFailure ? failure.message : "Could not list your pages.");
@@ -168,6 +172,12 @@ export function PagePicker({
               </div>
             ))
           )}
+          {truncated ? (
+            <p className="px-3 py-3 text-xs text-muted-foreground sm:px-4">
+              Notion has more pages and table rows than this list reads, so some pages may be
+              missing.
+            </p>
+          ) : null}
         </div>
       )}
       {canSignIn ? (
