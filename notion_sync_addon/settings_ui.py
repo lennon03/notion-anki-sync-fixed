@@ -649,6 +649,14 @@ def icon_button(icon_name: str, tooltip: str) -> QToolButton:
     return btn
 
 
+def _minutes(value: object) -> int:
+    """Read the sync interval; anything that isn't a number is 0 (off)."""
+    try:
+        return max(0, int(value or 0))  # type: ignore[call-overload]
+    except (TypeError, ValueError):  # config edited by hand
+        return 0
+
+
 def label(text: str, name: str) -> QLabel:
     """Create a label styled by its object name."""
     lbl = QLabel(text)
@@ -939,7 +947,7 @@ class SettingsDialog(QDialog):
         self.interval = NumberField(
             0,
             10080,
-            max(0, int(cfg.get("sync_every_minutes") or 0)),
+            _minutes(cfg.get("sync_every_minutes")),
             step=5,
             suffix=" min",
             special="Off",
@@ -1203,6 +1211,7 @@ class SettingsDialog(QDialog):
         text = QVBoxLayout()
         text.setSpacing(2)
         title = label(name or "Loading page name...", "pageName")
+        title.setTextFormat(Qt.TextFormat.PlainText)  # a Notion title
         title.setProperty("pending", not name)
         text.addWidget(title)
         text.addWidget(label(page_id, "pageId"))

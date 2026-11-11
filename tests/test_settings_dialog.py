@@ -44,6 +44,26 @@ def test_settings_dialog_shows_problems_as_plain_text(qapp):
     assert "<b>x</b>" in items[0].text()
 
 
+def test_page_names_are_shown_as_plain_text(qapp):
+    from PyQt6.QtCore import Qt
+
+    dialog = _dialog()
+    title = dialog._page_rows[P1][1]
+    dialog._apply_name(P1, "<b>Hist</b>")
+    assert title.textFormat() == Qt.TextFormat.PlainText
+    assert title.text() == "<b>Hist</b>"
+
+
+def test_dialog_opens_with_a_sync_interval_that_is_not_a_number(qapp):
+    from notion_sync_addon.settings_ui import SettingsDialog
+
+    cfg = {"notion_pages": [], "sync_every_minutes": "often"}
+    dialog = SettingsDialog(
+        cfg, canonical_page_id, lambda p, t: "", lambda c: None, lambda: None
+    )
+    assert dialog.config()["sync_every_minutes"] == 0
+
+
 def test_page_name_arriving_after_the_dialog_is_gone_is_safe(qapp):
     from notion_sync_addon import settings_ui
 
