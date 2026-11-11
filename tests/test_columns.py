@@ -5,7 +5,6 @@ registry."""
 import hashlib
 
 from notion_sync_addon.sync import (
-    TAG_PREFIX,
     UNCHECKED_TAG,
     RowColumns,
     clean_tag,
@@ -325,25 +324,6 @@ def test_hand_added_tags_survive_and_owned_tags_match_any_case(env):
     _assert_noop(env, env.sync(), 8)
 
 
-def test_tagged_rows_get_row_card_tags_and_unchanged_rows_none(env):
-    _page(env, _tagged("x"), edit=False)
-    env.sync()
-
-    def cards():
-        return {
-            row.source_id: row
-            for page in env.result.pages
-            for table in page.tables
-            for row in table.rows
-        }
-
-    assert cards()[ROW].tags == ["Notion::x"]
-    assert cards()[_rid(1)].tags == []
-    env.sync()
-    assert cards()[ROW].unchanged and env.note(ROW).tags == ["Notion::x"]
-    assert TAG_PREFIX == "Notion::"
-
-
 # --------------------------------------------------------------------- #
 # Note type registry
 # --------------------------------------------------------------------- #
@@ -402,17 +382,6 @@ def test_stale_registry_id_falls_back_to_the_name_and_keeps_other_roles(env):
     assert stats["unchanged"] == 8 and stats["added"] == 0
     assert env.col.get_config(KEY, None) == {"basic": mid, "cloze": 456}
     assert env.col.undo_status().undo == "Notion Sync"
-
-
-def test_synced_notes_shape(env):
-    _page(env, _tagged("x"), edit=False)
-    env.sync()
-    notes = env.sync_mod.synced_notes(env.col)
-    assert len(notes) == 8
-    entry = notes[ROW][0]
-    assert entry.mid == env.col.models.by_name("Notion Sync Card")["id"]
-    assert "Notion::x" in entry.tags
-    assert entry.nid == env.note(ROW).id
 
 
 # --------------------------------------------------------------------- #

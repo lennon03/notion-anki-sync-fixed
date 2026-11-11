@@ -9,7 +9,8 @@ from tests.helpers import DB1, DB2, DB3, P1, P2, _rid
 
 
 def test_failed_table_lookup_never_drops_its_cards(env):
-    """Review finding 1: P1 fails, then P2's table lookup fails."""
+    """P1 can't be read, then P2's table lookup fails: no card of
+    either goes."""
     env.sync()
     env.notion.pages[P2]["edited"] = "2026-01-02T00:00:00.000Z"
     env.notion.fail = {("page", P1), ("db", DB2)}
@@ -42,13 +43,6 @@ def test_removal_is_scoped_to_the_failed_table(env):
     assert env.sync()["removed"] == 1 and env.note(_rid(10)) is None
 
 
-def test_failed_page_protects_all_its_cards(env):
-    env.sync()
-    env.notion.fail = {("page", P2)}
-    stats = env.sync()
-    assert stats["removed"] == 0 and env.count() == 8
-
-
 def test_unreadable_row_is_kept(env):
     env.sync()
     env.notion.tables[DB1]["rows"][_rid(1)][1] = "2026-01-03T00:00:00.000Z"
@@ -60,8 +54,8 @@ def test_note_without_cache_entry_is_kept_when_anything_failed(env):
     env.sync()
     os.remove(env.path)  # no origins known
     env.notion.fail = {("query", DB3)}
-    del env.notion.tables[DB1]["rows"][_rid(0)]
-    assert env.sync()["removed"] == 0
+    del env.notion.tables[DB1]["rows"][_rid(0)]  # 404 (maybe not shared)
+    assert env.sync()["removed"] == 0 and env.note(_rid(0)) is not None
     env.notion.fail = set()
     assert env.sync()["removed"] == 1
 
@@ -112,14 +106,6 @@ def test_unlisted_notes_of_unknown_origin_are_looked_up(env):
     env.notion.calls.clear()
     env.sync()
     assert all(c[1] in (P1, P2) for c in env.notion.calls if c[0] == "page")
-
-
-def test_unknown_origin_lookup_error_keeps_the_note(env):
-    env.sync()
-    os.remove(env.path)
-    env.notion.fail = {("query", DB3)}
-    del env.notion.tables[DB1]["rows"][_rid(0)]  # 404 (maybe just not shared)
-    assert env.sync()["removed"] == 0 and env.note(_rid(0)) is not None
 
 
 def _unlisted_result(n):

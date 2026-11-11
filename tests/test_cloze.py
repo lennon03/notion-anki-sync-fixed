@@ -160,14 +160,24 @@ def test_cloze_to_basic_keeps_user_tags_and_one_note(env):
 def test_refused_cloze_keeps_the_old_note(env, monkeypatch):
     env.sync()
     old_id = env.note(ROW).id
-    _page(env, ROW, _para("{{c0::bad}}"))
+    _page(env, ROW, _para("the {{c1::answer}}"))
     _edit(env, ROW)
+    real_add = env.col.add_note
+
+    def refuse_clozes(note, deck_id):
+        if note.note_type()["name"] == CLOZE:
+            raise RuntimeError("no cloze")
+        return real_add(note, deck_id)
+
+    monkeypatch.setattr(env.col, "add_note", refuse_clozes)
     stats = env.sync()
-    assert _count(env, ROW) == 1
-    note = env.note(ROW)
-    if note.id == old_id:  # Anki refused it
-        assert stats["updated"] == 0
-        assert any("refused" in w for w in env.result.warnings)
+    assert stats["updated"] == 0 and stats["removed"] == 0
+    assert _count(env, ROW) == 1 and env.note(ROW).id == old_id
+    assert any("refused" in w for w in env.result.warnings)
+    # the row is tried again next sync
+    monkeypatch.setattr(env.col, "add_note", real_add)
+    assert env.sync()["updated"] == 1
+    assert env.note(ROW).note_type()["name"] == CLOZE
 
 
 def test_hand_made_cloze_note_is_never_touched(env):

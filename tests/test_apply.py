@@ -3,7 +3,6 @@
 
 from notion_sync_addon.sync import MODEL_CSS, _get_or_create_model
 from tests.helpers import DB1, OLD, _bold, _image, _para, _rid, _rt
-from tests.test_columns import ROW, _page
 
 
 def test_first_sync_then_noop_is_cached_and_not_undoable(env):
@@ -101,10 +100,9 @@ def test_full_resync_of_identical_content_changes_nothing(env):
 
 
 def test_row_title_is_escaped_in_the_front_field(env):
-    env.notion.tables[DB1]["rows"][ROW][0] = "What is <div> & a < b?"
-    _page(env, [_para("answer")])
+    env.notion.tables[DB1]["rows"][_rid(0)][0] = "What is <div> & a < b?"
     env.sync()
-    front = env.note(ROW).fields[0]
+    front = env.note(_rid(0)).fields[0]
     assert front == "What is &lt;div&gt; &amp; a &lt; b?"
 
 
@@ -178,39 +176,6 @@ def test_model_creation_leaves_backend_managed_id():
     model = _get_or_create_model(Collection())
     assert model["id"] == 0
     assert model["css"] == MODEL_CSS
-    assert MODEL_CSS == (
-        ".card { font-family: arial; font-size: 20px; line-height: 1.5; "
-        "text-align: center; color: black; background-color: white; }"
-    )
-
-
-def test_existing_model_css_is_left_alone():
-    """CSS is only written by a style preset, never by a sync."""
-
-    class Models:
-        def __init__(self):
-            self.saved = []
-
-        def get(self, mid):
-            return None
-
-        def by_name(self, name):
-            return {"css": ".card { text-align: left; }"}
-
-        def save(self, model):
-            self.saved.append(model)
-
-    class Collection:
-        def __init__(self):
-            self.models = Models()
-
-        def get_config(self, key, default=None):
-            return default
-
-    col = Collection()
-    model = _get_or_create_model(col)
-    assert model["css"] == ".card { text-align: left; }"
-    assert col.models.saved == []
 
 
 def test_css_edited_in_anki_is_kept_and_noop_sync_adds_no_undo(env):

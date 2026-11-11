@@ -415,7 +415,12 @@ def test_cards_of_unknown_origin_are_kept(web, notion, paths, request_):
     assert "front 0" in web.notes()
 
 
-def test_addon_config_applies_only_the_sync_options():
+def test_addon_config_keeps_defaults_and_applies_only_the_sync_options():
+    cfg = pipeline.addon_config("tok", ["a" * 32])
+    assert cfg["notion_token"] == "tok"
+    assert cfg["notion_pages"] == [{"page_id": "a" * 32}]
+    assert cfg["sync_column"] == "Anki"
+    json.dumps(cfg)
     cfg = pipeline.addon_config(
         "tok", [], {"sync_column": "Learn", "notion_token": "other"}
     )
@@ -432,14 +437,6 @@ def test_changed_options_read_notion(web, notion, paths, request_):
     notion.calls.clear()
     run_once(request_, paths, _say)
     assert notion.calls == []
-
-
-def test_addon_config_keeps_defaults_and_adds_pages():
-    cfg = pipeline.addon_config("tok", ["a" * 32])
-    assert cfg["notion_token"] == "tok"
-    assert cfg["notion_pages"] == [{"page_id": "a" * 32}]
-    assert cfg["sync_column"] == "Anki"
-    json.dumps(cfg)
 
 
 def test_broken_notion_never_raises_out_of_a_run(

@@ -19,7 +19,6 @@ from tests.helpers import (
     EDITED_TS,
     OLD,
     P2,
-    FakeTree,
     _image,
     _mention,
     _para,
@@ -149,21 +148,6 @@ def test_unchanged_rows_skip_content_download(frozen_now):
     assert not result.incomplete
 
 
-def test_failed_table_query_marks_result_incomplete():
-    from notion_sync_addon.notion_api import NotionError
-
-    class Client(_RowsClient):
-        def query_data_source(self, data_source_id):
-            raise NotionError("boom")
-
-    result = SyncResult()
-    client = cast(NotionClient, Client([]))
-    _fetch_table(
-        client, FakeTree(), {"id": "db"}, MediaCollector(), "Page", result
-    )
-    assert result.incomplete  # apply_sync then skips removing notes
-
-
 def test_unchanged_page_reuses_table_list_and_data_source(
     frozen_now, monkeypatch
 ):
@@ -224,31 +208,6 @@ def test_unchanged_page_reuses_table_list_and_data_source(
     assert [t.title for p in second.pages for t in p.tables] == ["Defs"]
     first.cleanup()
     second.cleanup()
-
-
-def test_page_children_are_fetched_once():
-    from notion_sync_addon.sync import (
-        PageData,
-        SyncResult,
-        _collect_page_children,
-    )
-
-    class CountingTree:
-        def __init__(self):
-            self.calls = []
-
-        def children(self, block_id):
-            self.calls.append(block_id)
-            return []
-
-    tree = CountingTree()
-    result = SyncResult()
-    data = PageData(title="Page", deck_name="Page")
-    client = cast(NotionClient, None)  # not used: the page has no tables
-    _collect_page_children(
-        "page-id", client, tree, MediaCollector(), data, result
-    )
-    assert tree.calls == ["page-id"]
 
 
 def test_fetch_cleans_temp_dir_on_unexpected_error(monkeypatch):

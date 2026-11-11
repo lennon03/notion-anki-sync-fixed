@@ -17,6 +17,7 @@ from notion_anki_worker.pipeline import RunOutcome
 from notion_anki_worker.ratelimit import RateLimiter
 from notion_anki_worker.redact import ScrubbingFormatter, register, scrub
 from notion_anki_worker.store import (
+    AUTH_FAILED,
     FULL_SYNC_NEEDED,
     KEY_SCHEDULE,
     LOG_HEAD_LINES,
@@ -246,6 +247,7 @@ def test_health_is_open_and_says_nothing(h):
         ("put", "/config"),
         ("post", "/sync"),
         ("post", "/backups/x/link"),
+        ("post", "/notion/oauth/start"),
     ],
 )
 def test_routes_need_the_shared_secret_and_a_session(h, method, path):
@@ -428,13 +430,17 @@ def test_second_sync_is_refused_while_one_runs(h, monkeypatch):
     h.app.state.runner._busy.release()
 
 
-def test_full_sync_needed_is_surfaced_and_pauses_the_schedule(h):
+@pytest.mark.parametrize(
+    "status, action",
+    [(FULL_SYNC_NEEDED, "full_sync"), (AUTH_FAILED, "reconnect_ankiweb")],
+)
+def test_owner_action_is_surfaced_and_pauses_the_schedule(h, status, action):
     h.connect()
     h.add_page()
-    h.outcome = RunOutcome(FULL_SYNC_NEEDED, "AnkiWeb needs a full sync")
+    h.outcome = RunOutcome(status, "the owner has to act")
     h.app.state.store.put(KEY_SCHEDULE, "60")
     h.sync()
-    assert h.status()["needed_action"] == "full_sync"
+    assert h.status()["needed_action"] == action
     assert h.status()["next_run_at"] is None
 
 
@@ -608,11 +614,6 @@ def test_notion_sign_in_stores_encrypted_and_never_echoes(h):
 def test_notion_sign_in_rejects_a_forged_state(h):
     assert _finish(h, "forged.state").status_code == 400
     assert not h.status()["notion_connected"]
-
-
-def test_notion_sign_in_needs_a_session(h):
-    response = h.client.post("/notion/oauth/start", headers=SITE)
-    assert response.status_code == 401
 
 
 def test_notion_refusal_is_reported_and_stores_nothing(h):
@@ -804,10 +805,6 @@ def test_no_run_can_start_while_connecting_or_forgetting(h, monkeypatch):
     assert h.client.delete("/connect", headers=h.headers).status_code == 200
     assert started == [None, None]
     assert not h.app.state.runner.running
-
-
-def test_blocking_statuses_cover_both_owner_actions():
-    assert FULL_SYNC_NEEDED in runner.BLOCKING_STATUSES
 
 
 EXPORT_ROUTES = (

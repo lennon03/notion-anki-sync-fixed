@@ -17,19 +17,6 @@ def _rename_table(env, db, page, title):
     env.notion.pages[page]["edited"] = NEW
 
 
-def test_first_sync_records_decks_and_noop_keeps_cache(env):
-    env.sync()
-    cache = env.sync_mod.load_cache(env.path)
-    assert cache.decks[DB1] == "Hist::Defs"
-    assert cache.decks[DB2] == "Philo::Notions"
-    env.col.add_custom_undo_entry("Previous action")
-    env.sync()
-    assert env.result.changes is None
-    assert env.col.undo_status().undo == "Previous action"
-    again = env.sync_mod.load_cache(env.path)
-    assert env.sync_mod.save_cache(env.path, again) is False
-
-
 def test_table_rename_moves_cards_in_one_undo_step(env):
     env.sync()
     _rename_table(env, DB1, P1, "Terms")

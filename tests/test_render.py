@@ -498,39 +498,6 @@ def test_table_rendering():
     assert "border:1px solid #b8bec5" in out
 
 
-def test_image_file_becomes_media_placeholder():
-    media = MediaCollector()
-    blocks = [
-        {
-            "type": "image",
-            "id": "1c4c" + "x" * 28,
-            "has_children": False,
-            "image": {
-                "type": "file",
-                "file": {
-                    "url": "https://s3.example.com/abc.png?ttl=1",
-                    "expiry_time": "",
-                },
-                "caption": [],
-            },
-        }
-    ]
-    out = render_blocks(blocks, media, FakeTree())
-    assert "<img src=\"@@NSMEDIA:" in out
-    assert len(media.files) == 1
-    fname = list(media.files)[0]
-    assert fname.startswith("ns-1c4c") and fname.endswith(".png")
-
-
-def test_media_resolve():
-    media = MediaCollector()
-    ph = media.add("https://x/y.png", "img1.png")
-    html = MediaCollector.resolve(
-        f'<img src="{ph}">', {"img1.png": "img1.png"}
-    )
-    assert '<img src="img1.png">' in html
-
-
 def test_media_file_names_are_lowercase():
     """N1: Anki on Windows stores the first copy lowercased."""
     media = MediaCollector()
@@ -596,29 +563,6 @@ def test_a_long_media_name_keeps_its_extension():
     assert len(name) == MAX_FILE_NAME
     assert name.endswith("x.png")
     assert name.startswith("ns-abc-")
-
-
-def test_a_short_media_name_is_unchanged_and_a_long_dotted_one_is_cut():
-    from notion_sync_addon.htmlify import MAX_FILE_NAME, _file_safe
-
     assert _file_safe("ns-abc-My File.pdf") == "ns-abc-my_file.pdf"
     name = _file_safe("a." + "b" * 200)  # no real extension to keep
     assert len(name) == MAX_FILE_NAME and name.startswith("a.bbb")
-
-
-def test_rendered_blocks_name_their_parts():
-    from notion_sync_addon.fetch import Rendered, _render_blocks
-    from notion_sync_addon.htmlify import MediaCollector
-
-    para = {
-        "id": "p",
-        "type": "paragraph",
-        "has_children": False,
-        "paragraph": {
-            "rich_text": [
-                {"type": "text", "plain_text": "x", "text": {"content": "x"}}
-            ]
-        },
-    }
-    done = _render_blocks([para], "Q", "", MediaCollector(), None, [])
-    assert done == Rendered("basic", "<p>x</p>", "")

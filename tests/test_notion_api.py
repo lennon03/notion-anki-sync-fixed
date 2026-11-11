@@ -52,14 +52,8 @@ def test_token_from_env(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("NOTION_API_TOKEN=secret-token\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    assert resolve_token({})
-    assert "secret" in resolve_token({})
-    assert resolve_token({"notion_token": "cfg-token"})
-
-
-def test_notion_client_uses_configured_token():
-    client = NotionClient("secret-token")
-    assert client._headers["Authorization"] == "Bearer secret-token"
+    assert resolve_token({}) == "secret-token"
+    assert resolve_token({"notion_token": " cfg-token "}) == "cfg-token"
 
 
 def test_retry_after_parsing():
@@ -103,33 +97,6 @@ def test_download_has_a_timeout(monkeypatch, tmp_path):
     NotionClient("t").download_file("https://example.com/f", str(path))
     assert path.read_bytes() == b"xy"
     assert seen["timeout"] and seen["timeout"] > 0
-
-
-def test_invalid_json_is_a_notion_error(monkeypatch):
-    from notion_sync_addon.notion_api import NotionError
-
-    class Resp:
-        status = 200
-
-        def read(self):
-            return b"<html>oops"
-
-        def getheader(self, name):
-            return None
-
-    class Conn:
-        def request(self, *a, **k):
-            pass
-
-        def getresponse(self):
-            return Resp()
-
-    client = NotionClient("t")
-    monkeypatch.setattr(client, "_connection", lambda: Conn())
-    monkeypatch.setattr("time.sleep", lambda s: None)
-    with pytest.raises(NotionError) as caught:
-        client.get_page("p")
-    assert caught.value.transient
 
 
 def test_a_query_stops_once_it_has_more_rows_than_asked_for(monkeypatch):
@@ -179,9 +146,11 @@ class _Conn:
     def __init__(self, bodies):
         self.bodies = bodies
         self.calls = 0
+        self.headers = {}
 
     def request(self, *a, **k):
         self.calls += 1
+        self.headers = k["headers"]
 
     def getresponse(self):
         return _Answer(self.bodies.pop(0))
@@ -194,6 +163,7 @@ def test_an_answer_that_is_not_json_is_retried(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)
     assert client.get_page("p") == {"id": "p"}
     assert conn.calls == 2
+    assert conn.headers["Authorization"] == "Bearer token"
 
 
 def test_an_answer_that_is_never_json_fails_after_the_retries(monkeypatch):

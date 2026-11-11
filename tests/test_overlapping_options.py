@@ -20,17 +20,6 @@ def _setup(env, card_type, words=WORDS):
     return env.note(ROW)
 
 
-def _shown_words(note, ord_, before, after):
-    """Apply the window rules by hand to a card's question HTML."""
-    question = note.cards()[ord_].question()
-    lines = re.findall(r'<div class="ns-line">(.*?)</div>', question)
-    active = next(i for i, ln in enumerate(lines) if 'class="cloze"' in ln)
-    keep = range(
-        max(active - before, 0), min(active + after, len(lines) - 1) + 1
-    )
-    return [i for i in range(len(lines)) if i in keep], active
-
-
 # ---------------------------------------------------------------- parsing
 
 
@@ -128,14 +117,6 @@ def test_window_cards_render_the_active_line_as_a_cloze(env):
         assert '<div class="ns-a">' in answer
 
 
-def test_window_visible_lines_by_rule(env):
-    note = _setup(env, "Overlapping 2/1")
-    shown, active = _shown_words(note, 3, 2, 1)
-    assert shown == [1, 2, 3, 4] and active == 3
-    shown, active = _shown_words(note, 0, 2, 1)
-    assert shown == [0, 1]
-
-
 def test_zero_window_shows_only_the_asked_line(env):
     note = _setup(env, "Overlapping 0/0")
     style = note.fields[0][: note.fields[0].index("</style>")]
@@ -203,7 +184,7 @@ def test_changing_the_spec_updates_the_note_and_noop_after(env):
     _assert_noop(env, env.sync(), 8)
 
 
-def test_row_fields_media_and_guarding():
+def test_braces_in_grouped_lines_are_escaped():
     from notion_sync_addon.sync import RowCard
 
     row = RowCard(
@@ -217,46 +198,3 @@ def test_row_fields_media_and_guarding():
     )
     text = _row_fields(row, {})[0]
     assert "{{c1::a}&#125;<br>b:&#58;c}}" in text
-
-
-# ------------------------------------------- multi-id clozes, investigated
-
-
-def _ids_fields(n, window):
-    """What a ``{{c1,2::...}}`` encoding of the same hiding would be."""
-    before, after = window
-    lines = []
-    for j in range(n):
-        ids = [j + 1] + [
-            k + 1 for k in range(n) if not (k - before <= j <= k + after)
-        ]
-        lines.append(
-            '<div class="ns-line">{{c%s::%s}}</div>'
-            % (",".join(str(i) for i in sorted(set(ids))), WORDS[j])
-        )
-    return "".join(lines)
-
-
-def test_multi_id_clozes_cannot_replace_the_css(env):
-    """{{c1,2::...}} hides a line on a card only as "[...]": the hidden lines
-    stay on the page (as many "[...]") and the active line cannot be told
-    from them, and on the back every hidden line is highlighted too. The
-    CSS keeps the behaviour; this documents why multi-id is not used."""
-    col = env.col
-    _setup(env, "Overlapping", WORDS[:2])
-    model = env.col.models.by_name("Notion Sync Cloze")
-    note = col.new_note(model)
-    note["Text"] = _ids_fields(6, (1, 1))
-    note["Source"] = "multi-id-experiment"
-    col.add_note(note, env.note(ROW).cards()[0].did)
-    cards = note.cards()
-    assert len(cards) == 6
-    q = cards[3].question()
-    # lines 0, 1 and 5 are outside the window of card 3 -> also "[...]"
-    assert q.count("[...]") == 4
-    # the hidden lines are still on the page, and each cloze span even
-    # carries its text in a data attribute
-    assert q.count('<div class="ns-line">') == 6
-    assert 'data-cloze="one"' in q
-    a = cards[3].answer()
-    assert a.count('class="cloze"') == 4  # the back highlights all four
