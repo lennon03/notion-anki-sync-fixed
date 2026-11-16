@@ -52,6 +52,7 @@ Say = Callable[[str], None]
 SYNC_OPTIONS = (
     "include_empty_cards",
     "page_cards",
+    "sub_pages",
     "sync_column",
     "card_type_column",
 )

@@ -4,12 +4,18 @@ r"""Find flashcards in the plain content of a Notion page.
 A page that is not a table can hold cards written as text:
 
 * ``### Question`` or ``#### Question``: the blocks under the heading, up
-  to the next heading or divider, are the answer. A numbered list as the
-  answer makes an overlapping cloze (recite it line by line).
+  to the next heading, divider, ``Q:`` line or ``front :: back`` line, are
+  the answer. A numbered list as the answer makes an overlapping cloze
+  (recite it line by line).
 * ``Q: question`` followed by ``A: answer`` (the answer goes on until the
-  next ``Q:``, heading, divider or empty line).
+  next ``Q:``, heading, divider or empty line). Blocks between the two
+  lines belong to the question.
 * ``front :: back`` on one line.
-* a paragraph, list item, quote or callout holding ``{{c1::cloze}}``.
+* a paragraph, list item, quote or callout holding a cloze: ``{{c1::x}}``
+  or the short ``{{x}}``, which is numbered for you.
+
+A line starting with ``Back:`` (or ``Answer:``) under a heading puts what
+is above it on the front of the card: see ``split_front``.
 
 Toggles are not read. This module only finds the cards; fetch.py renders
 them. It is standalone (no Anki imports) so it can be unit tested.
@@ -23,10 +29,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
-from .htmlify import _BLOCK_BODY_TYPES, _split_rich_lines
+from .htmlify import _BLOCK_BODY_TYPES, _split_rich_lines, has_short_cloze
 
 HEADINGS = ("heading_1", "heading_2", "heading_3", "heading_4")
 QUESTION_HEADINGS = ("heading_3", "heading_4")
+# a sub-page or a table: read on its own, never part of a card
+STRUCTURE = ("child_page", "child_database")
 CLOZE_BLOCKS = (
     "paragraph",
     "bulleted_list_item",
@@ -38,11 +46,20 @@ CLOZE_BLOCKS = (
 
 _CLOZE = re.compile(r"\{\{c\d+::")
 _Q = re.compile(r"^\s*(?:q|question)\s*:\s*(?P<rest>.*)$", re.I | re.S)
-_A = re.compile(r"^\s*(?:a|answer)\s*:\s*(?P<rest>.*)$", re.I | re.S)
+_A = re.compile(
+    r"^\s*(?:a|answer|back|r[eé]ponse)\s*:\s*(?P<rest>.*)$", re.I | re.S
+)
+# where the front of a card ends. Not the bare "A:": outside a "Q:" card it
+# is too easily ordinary text ("A: the set of ...")
+_BACK = re.compile(
+    r"^\s*(?:answer|back|r[eé]ponse)\s*:\s*(?P<rest>.*)$", re.I | re.S
+)
 _PAIR = re.compile(r"^(?P<front>.+?)\s::\s(?P<back>.+)$", re.S)
 _SPEC = re.compile(r"\s*\[(?P<spec>[^\[\]]*)\]\s*$")
 _SPEC_BODY = re.compile(
-    r"(?:overlap(?:ping)?)?\s*(?:\d+\s*/\s*\d+)?\s*(?:x\s*\d+)?", re.I
+    r"basic|(?:cloze\s+)?hide(?:\s+others)?"
+    r"|(?:overlap(?:ping)?)?\s*(?:\d+\s*/\s*\d+)?\s*(?:x\s*\d+)?",
+    re.I,
 )
 
 
@@ -55,6 +72,9 @@ class PageCard:
     title: List[dict] = field(default_factory=list)  # question rich text
     blocks: List[dict] = field(default_factory=list)  # answer blocks
     spec: Optional[str] = None  # "[2/1 x2]" option text, if written
+    # blocks shown on the front under the question. None: not looked for
+    # yet, a "Back:" line among ``blocks`` says where the front ends
+    front: Optional[List[dict]] = None
 
 
 def rt_text(rts: Any) -> str:
@@ -76,6 +96,11 @@ def has_cloze(text: str) -> bool:
     return bool(_CLOZE.search(text))
 
 
+def _cloze_rich(rts: Any) -> bool:
+    """Tell whether rich text holds a cloze, numbered or short."""
+    return has_cloze(rt_text(rts)) or has_short_cloze(rts)
+
+
 def _body(block: dict) -> dict:
     body = block.get(block.get("type") or "")
     return body if isinstance(body, dict) else {}
@@ -83,6 +108,10 @@ def _body(block: dict) -> dict:
 
 def _block_text(block: dict) -> str:
     return rt_text(_body(block).get("rich_text"))
+
+
+def _block_cloze(block: dict) -> bool:
+    return _cloze_rich(_body(block).get("rich_text"))
 
 
 def _is_empty(block: dict) -> bool:
@@ -202,6 +231,27 @@ def split_spec(rts: List[dict]) -> Tuple[List[dict], Optional[str]]:
     return _keep_chars(rts, m.start()), body
 
 
+def split_front(blocks: List[dict]) -> Tuple[List[dict], List[dict]]:
+    """Split a card's blocks into (front blocks, back blocks).
+
+    A paragraph starting with ``Back:`` (or ``Answer:``, ``Réponse:``)
+    ends the front: what is above it is shown with the question, the rest
+    of that line and what follows is the answer. Without such a line the
+    front is empty and every block is the answer.
+    """
+    for index, block in enumerate(blocks):
+        if block.get("type") != "paragraph":
+            continue
+        match = _BACK.match(_block_text(block))
+        if match is None:
+            continue
+        back = blocks[index + 1 :]
+        if match["rest"].strip() or block.get("has_children"):
+            back = [_strip_prefix(block, match.start("rest"))] + back
+        return blocks[:index], back
+    return [], blocks
+
+
 def parse_page(blocks: List[dict]) -> List[PageCard]:
     """Find the cards in the top-level blocks of a page."""
     blocks = _expand(blocks)
@@ -221,7 +271,7 @@ def parse_page(blocks: List[dict]) -> List[PageCard]:
         if btype == "paragraph" and _Q.match(text):
             i = _qa_card(blocks, i, cards)
             continue
-        if btype == "paragraph" and not has_cloze(text):
+        if btype == "paragraph" and not _block_cloze(block):
             pair = _PAIR.match(text)
             if pair is not None:
                 title = _keep_chars(
@@ -234,18 +284,14 @@ def parse_page(blocks: List[dict]) -> List[PageCard]:
                         "pair",
                         title,
                         [answer],
+                        front=[],
                     )
                 )
                 i += 1
                 continue
-        if btype in CLOZE_BLOCKS and has_cloze(text):
-            cards.append(
-                PageCard(
-                    _sid(block),
-                    "cloze",
-                    _body(block).get("rich_text") or [],
-                )
-            )
+        if btype in CLOZE_BLOCKS and _block_cloze(block):
+            title, spec = split_spec(_body(block).get("rich_text") or [])
+            cards.append(PageCard(_sid(block), "cloze", title, spec=spec))
         i += 1
     return [c for c in cards if SOURCE.fullmatch(c.source_id)]
 
@@ -265,12 +311,14 @@ def _heading_card(blocks: List[dict], i: int, cards: List[PageCard]) -> int:
         btype = block.get("type")
         if _is_hint(block):
             in_hint = True
-        elif btype in HEADINGS:
+        elif btype in HEADINGS or btype in STRUCTURE:
             break
         elif btype == "divider":
             if not in_hint:
                 break
             in_hint = False
+        elif btype == "paragraph" and not in_hint and _starts_card(block):
+            break  # a card of its own: the heading above it is a section
         answer.append(block)
         j += 1
     rts = _body(heading).get("rich_text") or []
@@ -285,72 +333,74 @@ def _heading_card(blocks: List[dict], i: int, cards: List[PageCard]) -> int:
                 spec,
             )
         )
-    elif has_cloze(rt_text(title)):
-        cards.append(
-            PageCard(
-                _sid(heading),
-                "cloze",
-                title,
-            )
-        )
+    elif _cloze_rich(title):
+        cards.append(PageCard(_sid(heading), "cloze", title, spec=spec))
     return j
 
 
+def _starts_card(block: dict) -> bool:
+    """Tell whether a paragraph is a ``Q:`` or a ``front :: back`` line."""
+    text = _block_text(block)
+    if _Q.match(text):
+        return True
+    return _PAIR.match(text) is not None and not _block_cloze(block)
+
+
+def _is_question(block: dict) -> bool:
+    return block.get("type") == "paragraph" and bool(
+        _Q.match(_block_text(block))
+    )
+
+
+def _is_answer(block: dict) -> bool:
+    return block.get("type") == "paragraph" and bool(
+        _A.match(_block_text(block))
+    )
+
+
+def _ends_card(block: dict) -> bool:
+    """Tell whether a block can't be part of a ``Q:`` / ``A:`` card."""
+    return (
+        block.get("type") in HEADINGS
+        or block.get("type") in STRUCTURE
+        or block.get("type") == "divider"
+        or _is_empty(block)
+        or _is_question(block)
+    )
+
+
 def _qa_card(blocks: List[dict], i: int, cards: List[PageCard]) -> int:
-    """Read ``Q:`` / ``A:`` at ``i``; return the next index."""
+    """Read ``Q:`` / ``A:`` at ``i``; return the next index.
+
+    The blocks between the two lines (a picture, a list, more text) are
+    shown on the front under the question.
+    """
     n = len(blocks)
     first = blocks[i]
     match = _Q.match(_block_text(first))
     assert match is not None
-    question = [_strip_prefix(first, match.start("rest"))]
+    question = _strip_prefix(first, match.start("rest"))
+    title = _body(question).get("rich_text") or []
+    front: List[dict] = []
     j = i + 1
-    while (
-        j < n
-        and not _A.match(_block_text(blocks[j]))
-        and blocks[j].get("type") == "paragraph"
-        and not _is_empty(blocks[j])
-        and not _Q.match(_block_text(blocks[j]))
-    ):
-        question.append(blocks[j])
+    while j < n and not _is_answer(blocks[j]) and not _ends_card(blocks[j]):
+        front.append(blocks[j])
         j += 1
-    if j >= n or not (
-        blocks[j].get("type") == "paragraph"
-        and _A.match(_block_text(blocks[j]))
-    ):
+    if j >= n or not _is_answer(blocks[j]):
         return i + 1  # no answer: not a card
     amatch = _A.match(_block_text(blocks[j]))
     assert amatch is not None
     answer = [_strip_prefix(blocks[j], amatch.start("rest"))]
     j += 1
-    while j < n:
-        block = blocks[j]
-        if (
-            block.get("type") in HEADINGS
-            or block.get("type") == "divider"
-            or _is_empty(block)
-            or (
-                block.get("type") == "paragraph"
-                and _Q.match(_block_text(block))
-            )
-        ):
-            break
-        answer.append(block)
+    while j < n and not _ends_card(blocks[j]):
+        answer.append(blocks[j])
         j += 1
     answer = [b for b in answer if not _is_empty(b)]
-    title: List[dict] = []
-    for index, piece in enumerate(question):
-        if index:
-            title.append({"type": "text", "text": {"content": " "}})
-        title += _body(piece).get("rich_text") or []
+    if not rt_text(title).strip() and front:
+        # "Q:" alone on its line: the next paragraph is the question
+        if front[0].get("type") == "paragraph":
+            title = _body(front.pop(0)).get("rich_text") or []
     title, spec = split_spec(title)
     if any(_renderable(b) for b in answer):
-        cards.append(
-            PageCard(
-                _sid(first),
-                "qa",
-                title,
-                answer,
-                spec,
-            )
-        )
+        cards.append(PageCard(_sid(first), "qa", title, answer, spec, front))
     return j

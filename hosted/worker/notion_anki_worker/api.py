@@ -88,6 +88,7 @@ class SyncOptions(_Body):
 
     include_empty_cards: Optional[StrictBool] = None
     page_cards: Optional[StrictBool] = None
+    sub_pages: Optional[StrictBool] = None
     sync_column: Optional[str] = Field(default=None, max_length=100)
     card_type_column: Optional[str] = Field(default=None, max_length=100)
 

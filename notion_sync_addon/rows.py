@@ -30,6 +30,10 @@ class RowCard:
     front: str  # the title as HTML (the Front or Text field)
     back_html: str  # may contain @@NSMEDIA:*@@ placeholders
     url: str
+    # more of the question, shown on the front under the title (same
+    # placeholders as back_html)
+    front_html: str = ""
+    hide_others: bool = False  # cloze: the other clozes stay hidden too
     unchanged: bool = False  # content not fetched: note is already current
     tags: List[str] = field(default_factory=list)  # Notion::... tags
     unchecked: bool = False  # sync checkbox off: no card, content not read
@@ -96,6 +100,7 @@ class SyncResult:
         # table -> deck name, for the tables read cleanly (see _move_renamed)
         self.decks_out: Dict[str, str] = {}
         self.page_ids: List[str] = []  # configured pages, canonical ids
+        self.sub_pages: Set[str] = set()  # pages read under them
         # set when part of Notion could not be read. Notes are then only
         # removed if the page and table they last came from were read fine,
         # so a network error can never delete cards.

@@ -100,9 +100,26 @@ def _window_style(spec: OverlapSpec) -> str:
     return "<style>" + "".join(rules) + "</style>"
 
 
+# Question-side CSS of a cloze that keeps its other clozes hidden: Anki
+# shows them as plain text (span.cloze-inactive), this blanks each one out
+# as a grey bar, so the asked "[...]" still stands out. In the note's own
+# field, like the window style above.
+HIDE_OTHERS_STYLE = (
+    "<style>"
+    ".ns-q .ns-hide .cloze-inactive { color: transparent; "
+    "background: rgba(128, 128, 128, 0.35); border-radius: 4px; "
+    "user-select: none; }"
+    ".ns-q .ns-hide .cloze-inactive * { visibility: hidden; }"
+    "</style>"
+)
+
+
 def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
     """Return a row's [Front/Text, Back/Back Extra], by its kind."""
     title = row.front
+    extra = _resolved(row.front_html, imported_names)
+    if extra:  # more of the question, under its title
+        title += f'<div class="ns-front">{extra}</div>'
     back = MediaCollector.resolve(row.back_html, imported_names)
     shown = f'<div class="ns-title">{title}</div>'
     if row.kind == "overlapping":
@@ -126,12 +143,16 @@ def _row_fields(row: RowCard, imported_names: Dict[str, str]) -> List[str]:
             f'{style}{shown}<div class="{wrap}">{"".join(lines)}</div>',
             "",
         ]
-    elif row.kind == "cloze" and has_cloze(row.title or title):
+    elif row.kind == "cloze" and has_cloze((row.title or row.front) + extra):
         fields = [title, back]
     elif row.kind == "cloze":
         fields = [shown + back, ""]
     else:
         fields = [title, back]
+    if row.kind == "cloze" and row.hide_others:
+        fields[0] = (
+            f'{HIDE_OTHERS_STYLE}<div class="ns-hide">{fields[0]}</div>'
+        )
     fields[1] += _resolved(row.context_html, imported_names)
     return [unicodedata.normalize("NFC", f) for f in fields]
 
@@ -669,7 +690,9 @@ def _next_cache(result: SyncResult) -> Cache:
         if key not in rows and key in remaining:
             rows[key] = state
     pages = {
-        k: v for k, v in result.previous.pages.items() if k in result.page_ids
+        k: v
+        for k, v in result.previous.pages.items()
+        if k in result.page_ids or k in result.sub_pages
     }
     pages.update(result.pages_out)
     dbs = {

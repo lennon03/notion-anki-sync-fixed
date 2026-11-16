@@ -27,7 +27,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 #   problems: what the last sync could not read, shown in the settings dialog
 # Bump RENDER_VERSION whenever the HTML produced for a row changes so every
 # row is re-rendered once (row origins and the page structure are kept).
-RENDER_VERSION = 6
+RENDER_VERSION = 7
 # Notion's last_edited_time has minute precision; a row only counts as
 # unchanged if that whole minute had passed when its content was fetched.
 EDIT_PRECISION_SECONDS = 60
@@ -228,11 +228,13 @@ def _dict(value: Any) -> dict:
 def _valid_page_entry(value: Any) -> bool:
     return (
         isinstance(value, list)
-        and len(value) in (3, 4)  # 4th: page cards were read
+        # 4th: page cards were read; 5th: the ids of its sub-pages
+        and len(value) in (3, 4, 5)
         and isinstance(value[0], str)
         and isinstance(value[1], (int, float))
         and isinstance(value[2], list)
         and all(isinstance(t, list) and len(t) == 2 for t in value[2])
+        and (len(value) < 5 or isinstance(value[4], list))
     )
 
 

@@ -20,6 +20,7 @@ from .cache import Cache, RowState, _fresh, is_unchanged
 from .htmlify import (
     MediaCollector,
     StrikeTags,
+    number_short_clozes,
     render_blocks,
     render_lines,
     rich_text_to_html,
@@ -42,7 +43,7 @@ from .notion_api import (
     plain_text,
     title_rich_text,
 )
-from .pagecards import PageCard, has_cloze, parse_page, rt_text
+from .pagecards import PageCard, has_cloze, parse_page, rt_text, split_front
 from .rows import (
     OVERLAP_SYNTAX,
     PAGE_CARDS,
@@ -206,23 +207,47 @@ def fetch_pages(
     return result
 
 
+# how deep sub-pages are followed under a configured page
+MAX_PAGE_DEPTH = 5
+
+
 def _fetch_page(
     page_id: str,
     client: NotionClient,
     tree: BlockSource,
     media: MediaCollector,
     result: SyncResult,
+    root_id: str = "",
+    parent_deck: str = "",
+    depth: int = 0,
 ) -> None:
+    """Read a page: its tables, its own cards, then its sub-pages.
+
+    A sub-page is read like the page itself and becomes a subdeck of it.
+    ``root_id`` is the configured page it sits under (itself for a
+    configured page): what its rows are recorded under, so removal is
+    scoped the same way for every page of the tree.
+    """
+    root_id = root_id or page_id
     result.progress("reading pages")
     page = client.get_page(page_id)
     title = page_title(page) or page_id[:8]
-    data = PageData(title=title, deck_name=deck_safe(title))
+    deck = deck_safe(title)
+    data = PageData(
+        title=title,
+        deck_name=f"{parent_deck}::{deck}" if parent_deck else deck,
+    )
     result.pages.append(data)
     failures = result.failures
 
     edited = str(page.get("last_edited_time") or "")
     cached = result.page_cache.get(page_id)
-    if cached and _fresh(cached[0], float(cached[1]), edited, page_id, None):
+    # an entry written before sub-pages were read doesn't list them
+    if (
+        cached
+        and len(cached) > 4
+        and _fresh(cached[0], float(cached[1]), edited, page_id, None)
+    ):
         # page untouched: same tables as last time, skip walking its blocks
         for db_id, db_title in cached[2]:
             block = {
@@ -231,7 +256,7 @@ def _fetch_page(
                 "child_database": {"title": db_title},
             }
             table = _fetch_table(
-                client, tree, block, media, data.deck_name, result, page_id
+                client, tree, block, media, data.deck_name, result, root_id
             )
             if table is not None:
                 data.tables.append(table)
@@ -244,41 +269,69 @@ def _fetch_page(
             media,
             data,
             result,
-            read_before=len(cached) > 3 and bool(cached[3]),
+            read_before=bool(cached[3]),
+            root_id=root_id,
         )
         if result.failures == failures:
             result.pages_out[page_id] = cached
-        return
-
-    fetched_at = time.time()
-    blocks = tree.children(page_id)
-    _collect_page_children(page_id, client, tree, media, data, result, blocks)
-    _page_cards(
-        page_id,
-        edited,
-        blocks,
-        client,
-        tree,
-        media,
-        data,
-        result,
-        read_at=fetched_at,
-    )
-    # a page with any failure keeps its previous cache entry: a table that
-    # could not be read must not vanish from the cached table list
-    if edited and result.failures == failures:
-        entry: list = [
+        children = [str(child) for child in cached[4]]
+    else:
+        fetched_at = time.time()
+        blocks = tree.children(page_id)
+        children = _collect_page_children(
+            root_id, client, tree, media, data, result, blocks
+        )
+        _page_cards(
+            page_id,
             edited,
-            fetched_at,
-            [
-                [t.db_id, t.raw_title]
-                for t in data.tables
-                if not t.db_id.startswith(PAGE_CARDS)
-            ],
-        ]
-        if result.config.get("page_cards", True):
-            entry.append(1)  # the page's own cards were read
-        result.pages_out[page_id] = entry
+            blocks,
+            client,
+            tree,
+            media,
+            data,
+            result,
+            read_at=fetched_at,
+            root_id=root_id,
+        )
+        # a page with any failure keeps its previous cache entry: a table
+        # that could not be read must not vanish from the cached table list
+        if edited and result.failures == failures:
+            result.pages_out[page_id] = [
+                edited,
+                fetched_at,
+                [
+                    [t.db_id, t.raw_title]
+                    for t in data.tables
+                    if not t.db_id.startswith(PAGE_CARDS)
+                ],
+                # whether the page's own cards were read
+                1 if result.config.get("page_cards", True) else 0,
+                children,
+            ]
+    if not result.config.get("sub_pages", True) or depth >= MAX_PAGE_DEPTH:
+        return
+    for child_id in children:
+        if child_id in result.sub_pages or child_id in result.page_ids:
+            continue  # read already: a page is one deck
+        result.sub_pages.add(child_id)
+        try:
+            _fetch_page(
+                child_id,
+                client,
+                tree,
+                media,
+                result,
+                root_id,
+                data.deck_name,
+                depth + 1,
+            )
+        except NotionError as e:
+            _fail(
+                result,
+                f"Sub-page of '{title}': {e}",
+                page_id=root_id,
+                problem=f"Sub-page of '{title}': {e.reason()}",
+            )
 
 
 def _numbered(blocks: List[dict]) -> bool:
@@ -291,9 +344,14 @@ def _numbered(blocks: List[dict]) -> bool:
 
 def _page_card_type(card: PageCard, answer: List[dict]) -> str:
     """Return the "Card type" a found card is rendered as ("" = by
-    content): overlapping when options are written after the question or
-    the answer is a numbered list.
+    content): what the options written after the question say, else
+    overlapping when the answer is a numbered list.
     """
+    spec = (card.spec or "").lower()
+    if spec == "basic":
+        return "basic"
+    if "hide" in spec:
+        return "cloze hide"
     if card.spec is not None:
         rest = re.sub(r"(?i)^overlap(?:ping)?", "", card.spec).strip().lower()
         rest = re.sub(r"(\d)\s*x", r"\1 x", rest)
@@ -314,18 +372,21 @@ def _page_cards(
     result: SyncResult,
     read_before: bool = False,
     read_at: float = 0.0,
+    root_id: str = "",
 ) -> None:
     """Read the cards written as text in a page (see pagecards.py).
 
     ``blocks`` is None when the page itself is unchanged: its cards are
     then reused, unless one is missing from the cache or has to be checked
     again, in which case the page's blocks are read. ``read_at`` is when
-    ``blocks`` were read: the cards are no newer than that.
+    ``blocks`` were read: the cards are no newer than that. ``root_id`` is
+    the configured page a sub-page sits under.
     """
     if not result.config.get("page_cards", True):
         return
+    root_id = root_id or page_id
     marker = PAGE_CARDS + page_id
-    result.db_pages[marker] = page_id
+    result.db_pages[marker] = root_id
     table = TableData(title="", db_id=marker, raw_title="")
     url = "https://www.notion.so/" + page_id
     if blocks is None:
@@ -333,7 +394,7 @@ def _page_cards(
         listed = [
             rid
             for rid, state in result.previous.rows.items()
-            if state.db_id == marker and state.page_id == page_id
+            if state.db_id == marker and state.page_id == root_id
         ]
         if listed and all(
             rid in result.known
@@ -356,7 +417,7 @@ def _page_cards(
             _fail(
                 result,
                 f"Page {data.title}: {e}",
-                page_id=page_id,
+                page_id=root_id,
                 problem=f"Page '{data.title}': {e.reason()}",
             )
             return
@@ -374,7 +435,7 @@ def _page_cards(
             _fail(
                 result,
                 f"Card in '{data.title}': {e}",
-                page_id=page_id,
+                page_id=root_id,
                 problem=f"Card in '{data.title}': {e.reason()}",
             )
             continue
@@ -392,7 +453,7 @@ def _page_cards(
             edited,
             read_at or time.time(),
             "",
-            page_id,
+            root_id,
             marker,
             1 if volatile else 0,
         )
@@ -416,10 +477,18 @@ def _render_page_card(
         if not has_cloze(title):
             return None
         return RowCard(
-            card.source_id, front, "", url=url, kind="cloze", title=title
+            card.source_id,
+            front,
+            "",
+            url=url,
+            kind="cloze",
+            title=title,
+            hide_others="hide" in (card.spec or "").lower(),
         )
-    if not title:
+    if not title and not card.front:
         return None
+    # the front is read first: its short clozes get the first numbers
+    shown = None if card.front is None else tree.strip_blocks(card.front)
     answer = tree.strip_blocks(card.blocks)
     done = _render_blocks(
         answer,
@@ -428,12 +497,15 @@ def _render_page_card(
         media,
         tree,
         result.warnings,
+        shown,
     )
     return RowCard(
         card.source_id,
         front,
         done.back,
         url=url,
+        front_html=done.front,
+        hide_others=done.hide_others,
         context_html=done.hint,
         kind=done.kind,
         lines=done.lines,
@@ -450,26 +522,36 @@ def _collect_page_children(
     data: PageData,
     result: SyncResult,
     blocks: List[dict],
-) -> None:
-    databases = []
+) -> List[str]:
+    """Read the tables on a page (``page_id``: the configured page they
+    are recorded under); return the ids of its sub-pages.
+    """
+    found: List[dict] = []
     for block in blocks:
-        if block.get("type") == "child_database":
-            databases.append(block)
+        if block.get("type") in ("child_database", "child_page"):
+            found.append(block)
         elif block.get("type") == "column_list" and block.get("has_children"):
             for col in tree.children(block["id"]):
                 if col.get("type") != "column" or not col.get("has_children"):
                     continue
-                databases += [
+                found += [
                     inner
                     for inner in tree.children(col["id"])
-                    if inner.get("type") == "child_database"
+                    if inner.get("type") in ("child_database", "child_page")
                 ]
+    databases = [b for b in found if b.get("type") == "child_database"]
+    pages = [
+        str(b.get("id", "")).replace("-", "").lower()
+        for b in found
+        if b.get("type") == "child_page" and b.get("id")
+    ]
     for block in databases:
         table = _fetch_table(
             client, tree, block, media, data.deck_name, result, page_id
         )
         if table is not None:
             data.tables.append(table)
+    return pages
 
 
 class _RecordingTree:
@@ -708,8 +790,10 @@ def _fetch_table(
             table.rows.append(
                 RowCard(
                     source_id=row_id,
-                    front=title_html(job.title_rich, job.title),
+                    front=title_html(got.title_rich, got.title),
                     back_html=got.done.back,
+                    front_html=got.done.front,
+                    hide_others=got.done.hide_others,
                     context_html=got.done.hint,
                     url=job.row.get("url", ""),
                     tags=got.tags,
@@ -717,7 +801,7 @@ def _fetch_table(
                     kind=got.done.kind,
                     lines=got.done.lines,
                     overlap=got.done.overlap,
-                    title=job.title,
+                    title=got.title,
                 )
             )
     finally:
@@ -774,6 +858,9 @@ class _Downloaded:
     tags: List[str] = field(default_factory=list)
     volatile: bool = False
     fetched_at: float = 0.0
+    # the title with its short clozes numbered
+    title: str = ""
+    title_rich: List[dict] = field(default_factory=list)
 
 
 def _download_row(job: _RowJob, tree: BlockSource) -> _Downloaded:
@@ -785,10 +872,13 @@ def _download_row(job: _RowJob, tree: BlockSource) -> _Downloaded:
     got = _Downloaded(fetched_at=time.time())
     recorder = _RecordingTree(tree)
     struck = StrikeTags(recorder)
+    # the title is read first: its short clozes get the first numbers
+    got.title_rich, struck.clozes = number_short_clozes(job.title_rich, 0)
+    got.title = plain_text(got.title_rich).strip()
     try:
         got.done = _render_row(
             job.row["id"],
-            job.title,
+            got.title,
             job.columns.card_type,
             got.media,
             struck,
@@ -824,6 +914,8 @@ class Rendered:
     hint: str  # the collapsed Hint section, or ""
     lines: List[str] = field(default_factory=list)  # overlapping lines
     overlap: Optional[OverlapSpec] = None  # overlapping options
+    front: str = ""  # more of the question, shown under the title
+    hide_others: bool = False  # cloze: the other clozes stay hidden too
 
 
 def _render_row(
@@ -851,9 +943,43 @@ def _render_blocks(
     media: MediaCollector,
     tree: Any,
     warnings: List[str],
+    front_blocks: Optional[List[dict]] = None,
 ) -> Rendered:
-    """Render the blocks of a row or page card (see ``_render_row``)."""
+    """Render the blocks of a row or page card (see ``_render_row``).
+
+    ``front_blocks`` are shown on the front under the title. None: a
+    ``Back:`` line among the blocks says where the front ends.
+    """
+    done = _render_kind(
+        all_blocks, title, card_type, media, tree, warnings, front_blocks
+    )
+    if done.hide_others and done.kind != "cloze":
+        done.hide_others = False
+        warnings.append(
+            f"Row '{title}': 'hide' is for cloze cards and no "
+            "{{c1::...}} was found; ignored"
+        )
+    return done
+
+
+def _render_kind(
+    all_blocks: List[dict],
+    title: str,
+    card_type: str,
+    media: MediaCollector,
+    tree: Any,
+    warnings: List[str],
+    front_blocks: Optional[List[dict]],
+) -> Rendered:
     blocks, hint_blocks = split_hint(all_blocks)
+    if front_blocks is None:
+        front_blocks, blocks = split_front(blocks)
+    front = render_blocks(front_blocks, media, tree)
+    hide = card_type.split()[1:] in (["hide"], ["hide", "others"])
+    if hide and card_type.split()[0] == "cloze":
+        card_type = "cloze"
+    else:
+        hide = False
     hint = ""
     if hint_blocks:
         body = render_blocks(hint_blocks, media, tree)
@@ -874,24 +1000,24 @@ def _render_blocks(
         if lines:
             options = None if spec == OverlapSpec() else spec
             return Rendered(
-                "overlapping", "\n".join(lines), hint, lines, options
+                "overlapping", "\n".join(lines), hint, lines, options, front
             )
         warnings.append(
             f"Row '{title}': Card type is Overlapping but the page has no "
             "line; made a basic card"
         )
-        return Rendered("basic", "", hint)
+        return Rendered("basic", "", hint, front=front)
     back = render_blocks(blocks, media, tree)
     if card_type == "basic":
-        return Rendered("basic", back, hint)
-    if has_cloze(title) or has_cloze(back):
-        return Rendered("cloze", back, hint)
+        return Rendered("basic", back, hint, front=front)
+    if has_cloze(title) or has_cloze(front) or has_cloze(back):
+        return Rendered("cloze", back, hint, front=front, hide_others=hide)
     if card_type == "cloze":
         warnings.append(
             f"Row '{title}': Card type is Cloze but no {{{{c1::...}}}} "
             "was found; made a basic card"
         )
-    return Rendered("basic", back, hint)
+    return Rendered("basic", back, hint, front=front, hide_others=hide)
 
 
 def _check_unlisted(client: NotionClient, result: SyncResult) -> None:

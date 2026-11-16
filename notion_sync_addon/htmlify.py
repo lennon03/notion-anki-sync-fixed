@@ -19,7 +19,7 @@ import copy
 import html
 import os
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .highlight import highlight, language_slug
 from .notion_api import plain_text
@@ -186,18 +186,81 @@ def _tint(hex_color: str) -> str:
 # --------------------------------------------------------------------- #
 
 
+# a cloze written without its number: {{Paris}} or {{Paris::a hint}}
+_SHORT_CLOZE = re.compile(r"\{\{(?!c\d+::)(?=[^{}]*[^\s{}])[^{}]+\}\}")
+
+
+def _rt_plain(rt: dict) -> str:
+    text = rt.get("text")
+    if rt.get("type", "text") == "text" and isinstance(text, dict):
+        return str(text.get("content", ""))
+    return str(rt.get("plain_text", ""))
+
+
+def _short_cloze_spots(rts: Any) -> List[Tuple[int, int]]:
+    """Where a short cloze needs its number: (index of the rich text
+    piece, offset in it), in reading order.
+
+    The braces may sit in differently formatted pieces. A cloze that
+    starts in inline code or in an equation is not one: it is code.
+    """
+    if not isinstance(rts, list):
+        return []
+    pieces = [_rt_plain(rt) if isinstance(rt, dict) else "" for rt in rts]
+    spots: List[Tuple[int, int]] = []
+    for match in _SHORT_CLOZE.finditer("".join(pieces)):
+        at = match.start() + 2  # the first character inside the braces
+        pos = 0
+        for index, piece in enumerate(pieces):
+            if pos <= at < pos + len(piece):
+                rt = rts[index]
+                code = (rt.get("annotations") or {}).get("code")
+                if rt.get("type", "text") == "text" and not code:
+                    spots.append((index, at - pos))
+                break
+            pos += len(piece)
+    return spots
+
+
+def has_short_cloze(rts: Any) -> bool:
+    """Tell whether rich text holds a short cloze like ``{{Paris}}``."""
+    return bool(_short_cloze_spots(rts))
+
+
+def number_short_clozes(rts: List[dict], used: int) -> Tuple[List[dict], int]:
+    """Give every short cloze its number: ``{{x}}`` becomes ``{{c1::x}}``.
+
+    ``used`` is how many were numbered before in the same card; returns
+    the new rich text and the new count.
+    """
+    spots = _short_cloze_spots(rts)
+    if not spots:
+        return rts, used
+    out = list(rts)
+    for number, (index, offset) in reversed(list(enumerate(spots, used + 1))):
+        rt = copy.deepcopy(out[index])
+        content = _rt_plain(rt)
+        content = f"{content[:offset]}c{number}::{content[offset:]}"
+        rt["text"]["content"] = content
+        rt["plain_text"] = content
+        out[index] = rt
+    return out, used + len(spots)
+
+
 class StrikeTags:
-    """A block source whose struck-through text is taken out as tags.
+    """A block source that prepares a card's text.
 
     Wraps anything with ``children(block_id)``. Every struck-through run of
     text in the blocks it returns is removed from them and its words are
-    collected in ``tags`` (split at commas, not cleaned). Code and equation
-    blocks are left alone.
+    collected in ``tags`` (split at commas, not cleaned). Short clozes
+    (``{{x}}``) get their numbers, counted over the whole card in the order
+    its text is read. Code and equation blocks are left alone.
     """
 
     def __init__(self, tree: Any) -> None:
         self._tree = tree
         self.tags: List[str] = []
+        self.clozes = 0  # short clozes numbered so far
 
     def children(self, block_id: str) -> List[dict]:
         """Return the child blocks without their struck-through text."""
@@ -240,6 +303,7 @@ class StrikeTags:
             self._flush(run)
             kept.append(rt)
         self._flush(run)
+        kept, self.clozes = number_short_clozes(kept, self.clozes)
         return kept
 
     def _flush(self, run: List[str]) -> None:
