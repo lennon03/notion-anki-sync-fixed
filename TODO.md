@@ -188,6 +188,16 @@
   deck; `page_cards: false` turns it off. Not done: Obsidian's `?` separator,
   `==highlight==` clozes and reversed (`:::`) cards.
 
+- [x] **Pages first.** A page is the main way to write cards; tables are for
+  the cases that need columns. Done: sub-pages are subdecks (`sub_pages`),
+  short clozes `{{x}}` numbered over the card, `[hide]` / `Cloze hide` to
+  keep the other clozes hidden, a `Back:` line that ends the front (page
+  cards and rows), blocks between `Q:` and `A:` on the front, a heading
+  followed by cards is a section, `[basic]` for a numbered list.
+  `RENDER_VERSION` is 7. Toggles stay unread on purpose (awkward to write
+  and each one costs a request). Not done: reversed cards, a page-wide
+  default for `[hide]`, sub-page tables in the note type picker.
+
 ## Choosing what syncs
 
 - [x] **Checkbox column to choose which rows sync.** A checkbox property

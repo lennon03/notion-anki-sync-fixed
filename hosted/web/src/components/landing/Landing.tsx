@@ -17,7 +17,9 @@ import { cn } from "~/lib/utils";
 
 import styles from "./landing.module.css";
 
-const REPO_URL = "https://github.com/lennon03/notion-anki-sync-fixed";
+export const REPO_URL = "https://github.com/lennon03/notion-anki-sync-fixed";
+// The guide: how to write cards. A page of this site.
+const GUIDE_URL = "/docs";
 // These docs are on the branch the site deploys from, not yet on main.
 const HOSTED_DOCS_URL = `${REPO_URL}/blob/experimental/docs/hosted-sync.md`;
 const ADDON_DOCS_URL = `${REPO_URL}/blob/experimental/notion_sync_addon/config.md`;
@@ -29,7 +31,7 @@ const SECTION_TEXT = "text-base leading-relaxed text-muted-foreground sm:text-lg
 const rise = (delayMs: number) => ({ "--rise-delay": `${delayMs}ms` }) as CSSProperties;
 
 const CHIPS: { x: string; y: string; rotate: string; delay: number; content: ReactNode }[] = [
-  { x: "-34rem", y: "5rem", rotate: "-7deg", delay: 250, content: "{{c1::Paris}}" },
+  { x: "-34rem", y: "5rem", rotate: "-7deg", delay: 250, content: "{{Paris}}" },
   { x: "33rem", y: "3.5rem", rotate: "6deg", delay: 350, content: "Q: Why?" },
   { x: "-32rem", y: "16rem", rotate: "5deg", delay: 450, content: <s>ethics</s> },
   { x: "34rem", y: "15rem", rotate: "-5deg", delay: 550, content: "### Question?" },
@@ -59,21 +61,35 @@ const RUN_MODES: { title: string; lead: string; snippet: string; points: string[
 ];
 
 const FEATURES: { title: string; text: string; snippet: ReactNode }[] = [
-  { title: "Basic cards", text: "The row title is the front. Its page is the back.", snippet: "row → card" },
   {
-    title: "Cards from plain text",
-    text: "A normal page works too: headings, question and answer, or one-liners.",
+    title: "A question and its answer",
+    text: "A heading with the answer under it, or two lines starting with Q: and A:.",
+    snippet: "### Question?",
+  },
+  {
+    title: "One-liners",
+    text: "Vocabulary and short facts, one card per line.",
     snippet: "front :: back",
   },
   {
     title: "Cloze",
-    text: "Anki's own syntax, in a title or a page.",
-    snippet: "{{c1::Canberra}}",
+    text: "Braces around what to hide. Numbered for you. Add [hide] to keep the other holes hidden.",
+    snippet: "{{Canberra}}",
   },
   {
-    title: "Overlapping cloze",
-    text: "Hides one line and shows the ones around it, so you recite text line by line.",
-    snippet: "Overlapping 2/1 x2",
+    title: "Lists to recite",
+    text: "A numbered list under a question is learned item by item, in order.",
+    snippet: "### Steps [2/1]",
+  },
+  {
+    title: "Long questions",
+    text: "A text, a picture or code on the front: everything above the Back: line.",
+    snippet: "Back: the answer",
+  },
+  {
+    title: "Sub-pages are subdecks",
+    text: "Organise a subject as a page tree. The decks follow it.",
+    snippet: "Biology::Cells",
   },
   {
     title: "Tags from strikethrough",
@@ -82,8 +98,8 @@ const FEATURES: { title: string; text: string; snippet: ReactNode }[] = [
   },
   { title: "Hints", text: "A collapsed section on the back of the card.", snippet: "#### Hint" },
   {
-    title: "Per-row checkbox",
-    text: "Untick a row and its card is suspended, not deleted.",
+    title: "Tables when you need columns",
+    text: "A row is a card. Untick its checkbox and the card is suspended, not deleted.",
     snippet: "Anki ☑",
   },
   {
@@ -159,7 +175,7 @@ const EXPORT_POINTS = [
   "An embed launcher opens the exporter from inside a Notion page.",
 ];
 
-function Mark() {
+export function Mark() {
   return (
     <svg aria-hidden viewBox="0 0 32 32" className="size-5 shrink-0">
       <rect width="32" height="32" rx="7" fill="#0f6e6e" />
@@ -304,9 +320,9 @@ export function Landing({ signedIn = false }: { signedIn?: boolean }) {
               variant="ghost-muted"
               size="sm"
               className="max-sm:hidden"
-              render={<a href={HOSTED_DOCS_URL} />}
+              render={<a href={GUIDE_URL} />}
             >
-              Docs
+              Guide
             </Button>
             <Button variant="ghost-muted" size="sm" render={<a href={REPO_URL} />}>
               GitHub
@@ -355,11 +371,14 @@ export function Landing({ signedIn = false }: { signedIn?: boolean }) {
               )}
               style={rise(90)}
             >
-              Notion Sync reads your pages and tables and keeps matching flashcards up to date. Run
-              it as an Anki add-on, or hosted, so AnkiWeb stays current with Anki closed.
+              Write cards as ordinary text in a Notion page. Notion Sync keeps the matching
+              flashcards up to date, as an Anki add-on or hosted, so AnkiWeb stays current with
+              Anki closed.
             </p>
             <div className={cn(styles.rise, "mb-4 flex flex-wrap justify-center gap-2.5")} style={rise(180)}>
-              <AccountButton size="xl" link={account} />
+              <Button size="xl" render={<a href={GUIDE_URL} />}>
+                Read the guide
+              </Button>
               <Button variant="outline" size="xl" render={<a href={REPO_URL} />}>
                 View on GitHub
                 <ArrowUpRight aria-hidden />
@@ -385,8 +404,8 @@ export function Landing({ signedIn = false }: { signedIn?: boolean }) {
         <section aria-labelledby="run-title" className={SECTION}>
           <div className={CONTAINER}>
             <SectionHead id="run-title" eyebrow="Two ways to run it" title="With Anki open, or without it.">
-              Both run the same sync code. Notion stays the source of truth, and each page becomes
-              a deck, each table a subdeck, each row a card.
+              Both run the same sync code. Notion stays the source of truth: each page becomes a
+              deck, each sub-page a subdeck, and what you write in it the cards.
             </SectionHead>
             <div className="mt-10 grid gap-4 md:grid-cols-2">
               {RUN_MODES.map((mode) => (
@@ -408,7 +427,11 @@ export function Landing({ signedIn = false }: { signedIn?: boolean }) {
         <section aria-labelledby="cards-title" className={SECTION}>
           <div className={CONTAINER}>
             <SectionHead id="cards-title" eyebrow="Cards" title="Write the note. The card follows.">
-              Most of it is set up in Notion itself. A table without the extra columns just works.
+              No setup and no table needed: you type, and what looks like a card becomes one. The{" "}
+              <InlineButton className="underline" render={<a href={GUIDE_URL} />}>
+                guide
+              </InlineButton>{" "}
+              shows each form with the card it gives.
             </SectionHead>
             <div className="mt-10 grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map((feature) => (
@@ -492,6 +515,7 @@ export function Landing({ signedIn = false }: { signedIn?: boolean }) {
           <ul className="flex flex-wrap gap-x-5 gap-y-2 text-[0.8125rem]">
             {[
               ["GitHub", REPO_URL],
+              ["Guide", GUIDE_URL],
               ["Hosted sync docs", HOSTED_DOCS_URL],
               ["Add-on docs", ADDON_DOCS_URL],
               [account.label, account.href],

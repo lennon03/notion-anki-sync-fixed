@@ -29,6 +29,20 @@
 <h1>Notion Sync: what's new</h1>
 <p class="lead">Everything added on the <code>experimental</code> branch and how to use it. Notion stays the source of truth: all of this is controlled from your Notion tables, and the add-on only reads Notion.</p>
 
+<div class="note">New here? The <a href="guide.md">guide</a> explains how to write cards from the start. This page lists what changed.</div>
+
+<h2>Pages first <span class="tag">newest</span></h2>
+<p>A page is now the main place to write cards; tables are for when you need columns.</p>
+<ul>
+  <li><strong>Sub-pages are subdecks.</strong> A sub-page of a configured page is read like the page itself (its text, its tables, its own sub-pages, up to 5 levels). Turn it off with <code>"sub_pages": false</code>.</li>
+  <li><strong>Short cloze.</strong> <code>{{Paris}}</code> is numbered for you (<code>{{c1::Paris}}</code>), in reading order over the whole card. <code>{{Paris::a city}}</code> keeps its hint. Works in pages and in table rows. Text in inline code or code blocks is left alone.</li>
+  <li><strong>Hide the other holes.</strong> <code>[hide]</code> after a cloze line or a question (or <code>Cloze hide</code> in the Card type column) keeps every other hole of the note hidden on each card. Without it, the other answers are shown, as Anki does.</li>
+  <li><strong>Long fronts.</strong> A line starting with <code>Back:</code> (or <code>Answer:</code>) puts everything above it on the front, in page cards and in table rows. What sits between a <code>Q:</code> line and its <code>A:</code> line (a picture, code, more text) is on the front too.</li>
+  <li><strong>Sections.</strong> A heading followed directly by <code>Q:</code> lines or <code>front :: back</code> lines is a section title, not a card.</li>
+  <li><strong><code>[basic]</code></strong> after a question keeps a numbered list as one ordinary card.</li>
+</ul>
+<div class="note">The first sync after updating re-reads every row once.</div>
+
 <h2>Column names at a glance</h2>
 <p>Add these columns (properties) to a Notion table. Names are matched in Settings defaults and can be changed in the add-on config.</p>
 <table>

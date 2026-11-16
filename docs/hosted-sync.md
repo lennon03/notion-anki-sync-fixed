@@ -48,7 +48,7 @@ drives `prepare_sync` / `fetch_pages` / `apply_sync` the same way the add-on's
 Each run logs how long its steps took (`Timings: ...`).
 
 **Sync options.** `PUT /config` takes `options` with any of the add-on's
-`include_empty_cards`, `page_cards` (true or false), `sync_column` and
+`include_empty_cards`, `page_cards`, `sub_pages` (true or false), `sync_column` and
 `card_type_column` (a column name, empty turns the column off). Options left
 out keep their value; the add-on's defaults apply until one is set. As in the
 add-on, a changed option applies to what the next run reads; a changed option

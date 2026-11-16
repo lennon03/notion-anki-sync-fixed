@@ -3,12 +3,19 @@
 Creates decks from your Notion workspace using the official Notion API
 (`2025-09-03`) and imports them directly into your collection.
 
+This is the reference. To learn how to write cards, read the
+[guide](../docs/guide.md) first.
+
 ## Structure
 
 - Every configured Notion page becomes an Anki deck named after the page.
-- Every table on the page becomes a subdeck.
-- Every row of a table becomes a card with the title on the front and the
-  row page content converted to HTML on the back.
+- Cards written as text in the page (a heading 3 or 4 with its answer,
+  `Q:` / `A:`, `front :: back`, a `{{cloze}}`) go in that deck.
+- Every sub-page becomes a subdeck and is read the same way, up to 5
+  levels deep.
+- Every table on a page becomes a subdeck. Every row of a table becomes a
+  card with the title on the front and the row page content converted to
+  HTML on the back.
 
 ## Config
 
@@ -20,6 +27,12 @@ Creates decks from your Notion workspace using the official Notion API
   case that entry is one of them with a mangled link.
 - `include_empty_cards`: add rows without a title as empty-front cards; enabled
   by default.
+- `page_cards`: read the cards written as text in pages; enabled by default.
+- `sub_pages`: read the sub-pages of the configured pages as subdecks;
+  enabled by default. Turning it off removes the cards that came from
+  sub-pages at the next sync.
+- `sync_column` (`Anki`) and `card_type_column` (`Card type`): the names of
+  the two optional table columns. An empty name turns the column off.
 - `sync_every_minutes`: background sync interval in minutes. `0` disables
   auto-sync (the default).
 - `sync_with_ankiweb` ("Anki's Sync button also syncs Notion"): after Anki
@@ -50,6 +63,13 @@ read; cards deleted there in Notion are removed once a sync can read it
 again. If the add-on doesn't know which table a card came from (its cache
 file was deleted), it asks Notion about that row: a row in Notion's trash
 has its card removed, any other answer keeps the card.
+
+A card written in a page is tied to the Notion block of its question (the
+heading, the `Q:` line, the cloze line): that block's id is the note's
+`Source`. Editing the text updates the note; deleting the block removes it.
+A page's cards are read again whenever the page was edited, and each
+sub-page is checked on its own, so an edit in a sub-page is seen without
+its parent changing. A sub-page that can't be read keeps its cards.
 
 Only rows edited in Notion since the last sync are downloaded again; the
 others are recognised by Notion's built-in last-edited time, so no extra
